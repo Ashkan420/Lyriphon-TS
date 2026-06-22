@@ -23,8 +23,13 @@ describe("utils", () => {
     expect(isValidImageUrl("https://example.com/image.gif")).toBe(false);
   });
 
-  it("builds safe links", () => {
-    expect(safeLink("Hello", "https://example.com")).toContain("<a href=\"");
+  it("builds safe link nodes", () => {
+    const link = safeLink("Hello", "https://example.com");
+    expect(link).toEqual({ tag: "a", attrs: { href: "https://example.com" }, children: ["Hello"] });
+  });
+
+  it("returns plain text when no url", () => {
     expect(safeLink("Hello", "")).toBe("Hello");
+    expect(safeLink("Hello")).toBe("Hello");
   });
 });

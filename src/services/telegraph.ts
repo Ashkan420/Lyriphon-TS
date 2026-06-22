@@ -3,6 +3,14 @@ import { CHANNEL_LINK, DEEZLOAD_BOT } from "../config";
 import { formatLyricsForTelegraph } from "./lyricsFormatter";
 import { isValidImageUrl, safeLink } from "../utils/urlValidation";
 
+export type TelegraphNode =
+  | string
+  | {
+      tag: string;
+      attrs?: Record<string, string>;
+      children?: TelegraphNode[];
+    };
+
 export interface TelegraphPageData {
   authorName: string;
   track: string;
@@ -33,7 +41,7 @@ export async function createSongTelegraph(env: Env, options: {
   const artistLink = `${DEEZLOAD_BOT}deezertartist${artistId}`;
   const albumLink = `${DEEZLOAD_BOT}deezertalbum${albumId}`;
 
-  const content = buildHtmlPage({
+  const content = buildPageContent({
     track,
     artist,
     album,
@@ -46,7 +54,7 @@ export async function createSongTelegraph(env: Env, options: {
   });
 
   console.log("=== TELEGRAPH OUTPUT ===");
-  console.log(content);
+  console.log(JSON.stringify(content, null, 2));
   console.log("========================");
 
   const response = await fetch("https://api.telegra.ph/createPage", {
@@ -89,7 +97,7 @@ export async function createSongTelegraph(env: Env, options: {
 }
 
 export async function editSongPage(env: Env, pageData: TelegraphPageData, lyrics: string) {
-  const content = buildHtmlPage({
+  const content = buildPageContent({
     track: pageData.track,
     artist: pageData.artist,
     album: pageData.album,
@@ -121,7 +129,7 @@ export async function editSongPage(env: Env, pageData: TelegraphPageData, lyrics
   return await response.json() as any;
 }
 
-function buildHtmlPage(options: {
+function buildPageContent(options: {
   track: string;
   artist: string;
   album: string;
@@ -131,41 +139,28 @@ function buildHtmlPage(options: {
   artistLink: string;
   albumLink: string;
   lyrics: string;
-}) {
+}): TelegraphNode[] {
   const { track, artist, album, releaseDate, albumCoverUrl, trackLink, artistLink, albumLink, lyrics } = options;
-  const coverHtml = isValidImageUrl(albumCoverUrl) ? `<img src="${albumCoverUrl}"><br>` : "";
+  const nodes: TelegraphNode[] = [];
 
-  const trackHtml = safeLink(track, trackLink);
-  const artistHtml = safeLink(artist, artistLink);
-  const albumHtml = safeLink(album, albumLink);
-  const safeDate = escapeHtml(releaseDate || "");
+  if (isValidImageUrl(albumCoverUrl)) {
+    nodes.push({ tag: "img", attrs: { src: albumCoverUrl } });
+  }
 
-  const trackSection = track ? `<p><strong>🎧 Track:</strong> ${trackHtml}</p>` : "";
-  const artistSection = artist ? `<p><strong>👤 Artist:</strong> ${artistHtml}</p>` : "";
-  const albumSection = album ? `<p><strong>💽 Album:</strong> ${albumHtml}</p>` : "";
-  const dateSection = releaseDate ? `<p><strong>📅 Date:</strong> ${safeDate}</p>` : "";
+  if (track) {
+    nodes.push({ tag: "p", children: [{ tag: "strong", children: ["🎧 Track: "] }, safeLink(track, trackLink)] });
+  }
+  if (artist) {
+    nodes.push({ tag: "p", children: [{ tag: "strong", children: ["👤 Artist: "] }, safeLink(artist, artistLink)] });
+  }
+  if (album) {
+    nodes.push({ tag: "p", children: [{ tag: "strong", children: ["💽 Album: "] }, safeLink(album, albumLink)] });
+  }
+  if (releaseDate) {
+    nodes.push({ tag: "p", children: [{ tag: "strong", children: ["📅 Date: "] }, releaseDate] });
+  }
 
-  let html = `
-${coverHtml}
+  nodes.push(...formatLyricsForTelegraph(lyrics));
 
-${trackSection}
-${artistSection}
-${albumSection}
-${dateSection}
-
-${formatLyricsForTelegraph(lyrics)}
-`;
-
-  html = html.replace(/<p>(&#8203;|\s)*<\/p>/g, "");
-
-  return html;
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+  return nodes;
 }

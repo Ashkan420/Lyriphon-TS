@@ -1,28 +1,20 @@
-export function formatLyricsForTelegraph(lyrics: string): string {
+import { TelegraphNode } from "./telegraph";
+
+export function formatLyricsForTelegraph(lyrics: string): TelegraphNode[] {
   if (!lyrics) {
-    return "<p>Lyrics not found.</p>";
+    return [{ tag: "p", children: ["Lyrics not found."] }];
   }
 
-  let escaped = escapeHtml(lyrics);
-  escaped = escaped.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const segments = escaped.split(/\n\s*\n/);
+  const normalized = lyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const segments = normalized.split(/\n\s*\n/);
+  const nodes: TelegraphNode[] = [];
 
-  const htmlParts: string[] = [];
-  segments.forEach((segment, i) => {
+  for (const segment of segments) {
     const lines = segment.split("\n").map(l => l.trim()).filter(Boolean);
     for (const line of lines) {
-      htmlParts.push(`<p>${line}</p>`);
+      nodes.push({ tag: "p", children: [line] });
     }
-  });
+  }
 
-  return htmlParts.join("\n");
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+  return nodes;
 }

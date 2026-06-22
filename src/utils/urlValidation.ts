@@ -86,19 +86,9 @@ export function isValidImageUrl(url: string): boolean {
   return /^https?:\/\/.*\.(jpg|jpeg|png|webp)$/i.test(url);
 }
 
-export function safeLink(text: string, url?: string): string {
+export function safeLink(text: string, url?: string): string | { tag: string; attrs: Record<string, string>; children: string[] } {
   if (!url) {
-    return escapeHtml(text);
+    return text;
   }
-  const safeUrl = escapeHtml(url);
-  return `<a href="${safeUrl}">${escapeHtml(text)}</a>`;
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+  return { tag: "a", attrs: { href: url }, children: [text] };
 }
