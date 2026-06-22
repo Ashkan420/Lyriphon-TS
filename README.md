@@ -43,8 +43,8 @@ This repository is being migrated to a Cloudflare Workers + grammY TypeScript pr
 3. Create and migrate the D1 database:
 
    ```bash
-   npx wrangler d1 create lyriphon
-   npx wrangler d1 execute lyriphon --file=schema.sql
+   npx wrangler d1 create lyriphon_d1
+   npx wrangler d1 execute lyriphon_d1 --file=schema.sql
    ```
 
 4. Add secrets:
@@ -160,4 +160,5 @@ npm test
 
 ## Configuration notes
 
-- `CHANNEL_LINK` and `DEEZLOAD_BOT` are defined in `src/config.ts`. Update them if you fork the project.
+- Secrets (`BOT_TOKEN`, `TELEGRAPH_ACCESS_TOKEN`, `WEBHOOK_SECRET_TOKEN`) are set via `wrangler secret put`.
+- `CHANNEL_LINK` and `DEEZLOAD_BOT` are in `src/config.ts` — update them if you fork.
