@@ -160,6 +160,8 @@ function buildPageContent(options: {
     nodes.push({ tag: "p", children: [{ tag: "strong", children: ["📅 Date: "] }, releaseDate] });
   }
 
+  nodes.push({ tag: "hr" });
+  nodes.push({ tag: "h3", children: ["Lyrics"] });
   nodes.push(...formatLyricsForTelegraph(lyrics));
 
   return nodes;

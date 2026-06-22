@@ -9,6 +9,7 @@ __pycache__/
 *.py[codz]
 *$py.class
 .npm-cache/
+python/
 
 # Python temp files
 *.pyc
