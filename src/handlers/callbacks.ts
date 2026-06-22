@@ -71,13 +71,13 @@ export async function processTextMessage(ctx: Context, session: SessionData, env
 
 async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
   if (session.mode !== SessionMode.EDIT_LYRICS) {
-    await ctx.answerCallbackQuery({ text: "Not in lyrics editing mode", show_alert: true });
+    try { await ctx.answerCallbackQuery({ text: "Not in lyrics editing mode", show_alert: true }); } catch {}
     return false;
   }
 
   const myVersion = captureVersion(session);
   if (session.lyrics.locked) {
-    await ctx.answerCallbackQuery({ text: "Already finalizing...", show_alert: true });
+    try { await ctx.answerCallbackQuery({ text: "Already finalizing...", show_alert: true }); } catch {}
     return false;
   }
 
@@ -85,17 +85,17 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
   const lastData = session.telegraph.data as any;
   if (!lastData) {
     session.lyrics.locked = false;
-    await ctx.answerCallbackQuery({ text: "No song data found", show_alert: true });
+    try { await ctx.answerCallbackQuery({ text: "No song data found", show_alert: true }); } catch {}
     return false;
   }
 
   if (!session.lyrics.buffer.length) {
     session.lyrics.locked = false;
-    await ctx.answerCallbackQuery({ text: "No lyrics to save", show_alert: true });
+    try { await ctx.answerCallbackQuery({ text: "No lyrics to save", show_alert: true }); } catch {}
     return false;
   }
 
-  await ctx.answerCallbackQuery();
+  try { await ctx.answerCallbackQuery(); } catch {}
 
   const fullLyrics = session.lyrics.buffer.join("\n");
   const chatId = ctx.chat?.id;
@@ -136,7 +136,7 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
 
 async function handleAudioDecisionCallback(ctx: Context, session: SessionData, env: Env) {
   const data = ctx.callbackQuery?.data;
-  await ctx.answerCallbackQuery();
+  try { await ctx.answerCallbackQuery(); } catch {}
 
   const decision = session.audio.pendingDecision as any;
   if (!decision) {
@@ -224,11 +224,11 @@ async function handleAudioDecisionCallback(ctx: Context, session: SessionData, e
 
 async function handleEditFieldCallback(ctx: Context, session: SessionData) {
   if (session.mode === SessionMode.EDIT_FIELD || session.mode === SessionMode.EDIT_LYRICS) {
-    await ctx.api.answerCallbackQuery({ callback_query_id: ctx.callbackQuery?.id, text: "❌ You already have an active edit session", show_alert: true } as any);
+    try { await ctx.api.answerCallbackQuery({ callback_query_id: ctx.callbackQuery?.id, text: "❌ You already have an active edit session", show_alert: true } as any); } catch {}
     return;
   }
 
-  await ctx.answerCallbackQuery();
+  try { await ctx.answerCallbackQuery(); } catch {}
   const data = ctx.callbackQuery?.data ?? "";
   const field = data.replace("edit_field_", "");
   session.edit.field = field;
@@ -359,18 +359,18 @@ async function handleNewFieldValue(ctx: Context, session: SessionData, env: Env)
 
 async function handleCancelEditCallback(ctx: Context, session: SessionData) {
   if (session.mode !== SessionMode.EDIT_FIELD && session.mode !== SessionMode.EDIT_LYRICS) {
-    await ctx.api.answerCallbackQuery({ callback_query_id: ctx.callbackQuery?.id, text: "No active edit session", show_alert: true } as any);
+    try { await ctx.api.answerCallbackQuery({ callback_query_id: ctx.callbackQuery?.id, text: "No active edit session", show_alert: true } as any); } catch {}
     return;
   }
 
-  await ctx.answerCallbackQuery();
+  try { await ctx.answerCallbackQuery(); } catch {}
   await cancelEdit(ctx.api as any, ctx.chat?.id ?? 0, session);
   try { await ctx.editMessageText("❌ Edit cancelled"); } catch {}
 }
 
 async function handleDoneLyricsCallback(ctx: Context, session: SessionData, env: Env) {
   if (session.mode !== SessionMode.EDIT_LYRICS) {
-    await ctx.api.answerCallbackQuery({ callback_query_id: ctx.callbackQuery?.id, text: "No active edit session", show_alert: true } as any);
+    try { await ctx.api.answerCallbackQuery({ callback_query_id: ctx.callbackQuery?.id, text: "No active edit session", show_alert: true } as any); } catch {}
     return;
   }
 
@@ -383,7 +383,7 @@ async function handleSendToChannelCallback(ctx: Context, session: SessionData) {
     return;
   }
 
-  await ctx.answerCallbackQuery();
+  try { await ctx.answerCallbackQuery(); } catch {}
   const channelId = data.replace("send_channel_", "");
   const audioFileId = session.audio.pendingFileId;
   const caption = session.audio.pendingCaption;
@@ -398,12 +398,12 @@ async function handleSendToChannelCallback(ctx: Context, session: SessionData) {
   try {
     const member = await ctx.api.getChatMember(Number(channelId), Number(ctx.from?.id ?? 0));
     if (member.status !== "administrator" && member.status !== "creator") {
-      await ctx.answerCallbackQuery({ text: "❌ You are not an admin in this channel.", show_alert: true });
+      try { await ctx.answerCallbackQuery({ text: "❌ You are not an admin in this channel.", show_alert: true }); } catch {}
       return;
     }
   } catch (error) {
     console.warn("Failed to verify admin status for channel", channelId, error);
-    await ctx.answerCallbackQuery({ text: "❌ Can't access this channel.", show_alert: true });
+    try { await ctx.answerCallbackQuery({ text: "❌ Can't access this channel.", show_alert: true }); } catch {}
     return;
   }
 
@@ -428,7 +428,7 @@ async function handleSendToChannelCallback(ctx: Context, session: SessionData) {
 }
 
 async function handleTrackSelectionCallback(ctx: Context, session: SessionData, env: Env) {
-  await ctx.answerCallbackQuery();
+  try { await ctx.answerCallbackQuery(); } catch {}
   const data = ctx.callbackQuery?.data;
   if (!data || !data.startsWith("track_")) {
     return;

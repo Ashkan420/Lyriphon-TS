@@ -73,7 +73,7 @@ export async function songSearchCommand(ctx: Context, session: SessionData) {
 }
 
 export async function handleSearchPageCallback(ctx: Context, session: SessionData) {
-  await ctx.answerCallbackQuery();
+  try { await ctx.answerCallbackQuery(); } catch {}
 
   const data = ctx.callbackQuery?.data;
   if (!data || !data.startsWith("search_page_")) {
