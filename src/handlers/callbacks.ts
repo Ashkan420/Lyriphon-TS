@@ -116,7 +116,7 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
     await transition(session, SessionMode.IDLE, ctx.api, chatId);
     resetFlow(session.lyrics);
     resetFlow(session.edit);
-    await ctx.editMessageText("❌ Failed to update Telegraph page");
+    try { await ctx.editMessageText("❌ Failed to update Telegraph page"); } catch {}
     return false;
   }
 
@@ -130,7 +130,7 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
   resetFlow(session.lyrics);
   resetFlow(session.edit);
 
-  await ctx.editMessageText("✅ Lyrics Updated");
+  try { await ctx.editMessageText("✅ Lyrics Updated"); } catch {}
   return true;
 }
 
@@ -248,7 +248,7 @@ async function handleEditFieldCallback(ctx: Context, session: SessionData) {
     await transition(session, SessionMode.EDIT_FIELD, ctx.api, ctx.chat?.id);
   } else if (field === "lyrics") {
     text = `✏️ Send the new lyrics.\n\n• You can send multiple messages\n• Click Done when finished`;
-    markup = { inline_keyboard: doneCancelButtons };
+    markup = { inline_keyboard: cancelButton };
     session.lyrics.buffer = [];
     session.lyrics.messageIds = [];
     await transition(session, SessionMode.EDIT_LYRICS, ctx.api, ctx.chat?.id);
@@ -348,13 +348,13 @@ async function handleNewFieldValue(ctx: Context, session: SessionData, env: Env)
     console.warn("Failed to update Telegraph page for field", field, error);
     await transition(session, SessionMode.IDLE, ctx.api, ctx.chat?.id);
     resetFlow(session.edit);
-    await ctx.reply("❌ Failed to update Telegraph page");
+    try { await ctx.reply("❌ Failed to update Telegraph page"); } catch {}
     return;
   }
 
   await transition(session, SessionMode.IDLE, ctx.api, ctx.chat?.id);
   resetFlow(session.edit);
-  await ctx.reply("✅ Updated");
+  try { await ctx.reply("✅ Updated"); } catch {}
 }
 
 async function handleCancelEditCallback(ctx: Context, session: SessionData) {
@@ -365,7 +365,7 @@ async function handleCancelEditCallback(ctx: Context, session: SessionData) {
 
   await ctx.answerCallbackQuery();
   await cancelEdit(ctx.api as any, ctx.chat?.id ?? 0, session);
-  await ctx.editMessageText("❌ Edit cancelled");
+  try { await ctx.editMessageText("❌ Edit cancelled"); } catch {}
 }
 
 async function handleDoneLyricsCallback(ctx: Context, session: SessionData, env: Env) {
