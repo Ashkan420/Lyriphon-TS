@@ -1,0 +1,19 @@
+name = "lyriphon-workers"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[vars]
+WEBHOOK_PATH = "webhook"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lyriphon_d1"
+database_id = "c7e8db7b-6144-482c-a3cf-57b4ee861780"
+
+[[durable_objects.bindings]]
+name = "SESSION_DO"
+class_name = "SessionDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = [ "SessionDO" ]
