@@ -75,16 +75,6 @@ This repository is being migrated to a Cloudflare Workers + grammY TypeScript pr
 
 ---
 
-## Legacy Python runtime
-
-The legacy bot runtime is preserved in `python/` for reference and is not the active root application.
-
-- `python/main.py` is the original entry point.
-- `python/config.py`, `python/db.py`, `python/core/`, `python/handlers/`, `python/services/`, `python/utils/`, and `python/tests/` are preserved.
-- Use `python/README.md` for the legacy Python setup.
-
----
-
 ## Features
 
 - **Two ways to start** — search with `/song <track name>`, or **just send an audio file** and the bot reads the title/artist from the file's tags (or filename) and searches automatically.
