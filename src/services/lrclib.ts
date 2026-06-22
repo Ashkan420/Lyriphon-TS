@@ -2,7 +2,7 @@ import { retryAsync } from "../utils/retry";
 
 const LRCLIB_SEARCH = "https://lrclib.net/api/search";
 
-export async function getLyrics(track: string, artist: string, retries = 2, delay = 2.0) {
+export async function getLyrics(track: string, artist: string, retries = 2, delay = 0.5) {
   async function fetchLyrics() {
     const url = new URL(LRCLIB_SEARCH);
     url.searchParams.set("track_name", track);
@@ -17,7 +17,7 @@ export async function getLyrics(track: string, artist: string, retries = 2, dela
     const best = Array.isArray(results) && results[0];
     const lyrics = best?.plainLyrics ?? best?.syncedLyrics;
     if (!lyrics) {
-      throw new Error("No lyrics found");
+      return null;
     }
     return lyrics;
   }
