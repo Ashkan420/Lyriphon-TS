@@ -106,15 +106,19 @@ export async function attachAudioAndPromptChannel(
   session.audio.pendingCaption = caption;
   session.audio.pendingTelegraphUrl = telegraphUrl;
 
-  const channels = await getUserChannels(db, userId);
-  if (channels.length) {
-    const channelButtons = channels.map((row) => [
-      { text: row.channel_id, callback_data: `send_channel_${row.channel_id}` },
-    ]);
-    const prompt = await bot.sendMessage(chatId, "Send to which channel?", {
-      reply_markup: { inline_keyboard: channelButtons },
-    });
-    session.audio.sendChannelPromptId = prompt.message_id;
+  try {
+    const channels = await getUserChannels(db, userId);
+    if (channels.length) {
+      const channelButtons = channels.map((row) => [
+        { text: row.title ?? row.channel_id, callback_data: `send_channel_${row.channel_id}` },
+      ]);
+      const prompt = await bot.sendMessage(chatId, "Send to which channel?", {
+        reply_markup: { inline_keyboard: channelButtons },
+      });
+      session.audio.sendChannelPromptId = prompt.message_id;
+    }
+  } catch (error) {
+    console.warn("Failed to fetch user channels (table may not exist)", error);
   }
 
   return caption;

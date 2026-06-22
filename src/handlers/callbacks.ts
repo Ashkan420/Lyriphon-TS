@@ -16,6 +16,7 @@ import {
   captureVersion,
   isStale,
 } from "../session/index";
+import { clearAudioState } from "../session/flows";
 import { SessionData } from "../session/types";
 import { transition } from "../session/transitions";
 import { Env } from "../env";
@@ -442,10 +443,10 @@ async function handleTrackSelectionCallback(ctx: Context, session: SessionData, 
   session.search.results = undefined;
   session.search.page = 0;
 
-  await ctx.editMessageText("⏳ Fetching track info...");
+  try { await ctx.editMessageText("⏳ Fetching track info..."); } catch { return; }
   const trackData = await getTrack(trackId) as any;
   if (!trackData) {
-    await ctx.editMessageText("❌ Failed to fetch track info. Try again later.");
+    try { await ctx.editMessageText("❌ Failed to fetch track info. Try again later."); } catch {}
     return;
   }
 
@@ -458,18 +459,18 @@ async function handleTrackSelectionCallback(ctx: Context, session: SessionData, 
 
   let releaseDate = "Unknown";
   if (albumId) {
-    await ctx.editMessageText("⏳ Fetching metadata...");
+    try { await ctx.editMessageText("⏳ Fetching metadata..."); } catch {}
     const albumInfo = await getAlbum(albumId);
     if (albumInfo) {
       releaseDate = (albumInfo as any).release_date ?? "Unknown";
     }
   }
 
-  await ctx.editMessageText("⏳ Fetching lyrics...");
+  try { await ctx.editMessageText("⏳ Fetching lyrics..."); } catch {}
   const lyrics = await getLyrics(trackName, artistName);
   const authorName = ctx.from?.first_name ?? "Unknown User";
 
-  await ctx.editMessageText("⏳ Creating Telegraph page...");
+  try { await ctx.editMessageText("⏳ Creating Telegraph page..."); } catch {}
 
   let telegraphResult;
   try {
@@ -526,19 +527,23 @@ async function handleTrackSelectionCallback(ctx: Context, session: SessionData, 
       await safeDelete(ctx.api as any, ctx.chat.id, session.audio.messageId);
     }
 
-    session.audio.fileId = undefined;
+    clearAudioState(session);
     session.telegraph.url = undefined;
   }
 
   const status = hasAudio ? "Telegraph Created & Audio Attached" : "Telegraph Created";
   const extra = hasAudio ? "" : "Send a music file to attach the Lyrics button to it.\n\n";
 
-  const replyText = `✅ <b>${status}</b>\n\n<blockquote>🎵 <b>${escapeMd(trackName)}</b>\n👤 ${escapeMd(artistName)}\n💽 ${escapeMd(albumName)}\n📅 ${escapeMd(releaseDate)}</blockquote>\n\n${extra}👇 Edit options below — or tap to open the page:\n<a href="${telegraphResult.url}">📖 Open Telegraph Page</a>`;
+  const replyText = `✅ <b>${status}</b>\n\n<blockquote>🎵 <b>${(trackName)}</b>\n👤 ${(artistName)}\n💽 ${(albumName)}\n📅 ${(releaseDate)}</blockquote>\n\n${extra}👇 Edit options below — or tap to open the page:\n<a href="${telegraphResult.url}">📖 Open Telegraph Page</a>`;
 
-  await ctx.editMessageText(replyText, {
-    parse_mode: "HTML",
-    reply_markup: { inline_keyboard: buildEditMenu() },
-  });
+  try {
+    await ctx.editMessageText(replyText, {
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: buildEditMenu() },
+    });
+  } catch (error) {
+    console.warn("Failed to edit message with final result", error);
+  }
 }
 
 function buildEditMenu() {
