@@ -58,6 +58,11 @@ export async function searchAndShowResults(
     return false;
   }
 
+  if (!results.length) {
+    await bot.sendMessage(chatId, `❌ No results found for: ${displayLabel}`);
+    return false;
+  }
+
   session.search.results = results;
   session.search.page = 0;
 
