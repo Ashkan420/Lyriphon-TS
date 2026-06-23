@@ -72,7 +72,7 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
       return;
     }
 
-    await ctx.reply("Text messages are not yet handled in this port.");
+    return;
   });
 
   bot.on("message:audio", async (ctx) => {

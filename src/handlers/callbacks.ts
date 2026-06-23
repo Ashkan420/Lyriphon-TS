@@ -62,7 +62,6 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
 
 export async function processTextMessage(ctx: Context, session: SessionData, env: Env) {
   if (!session.edit.field || !(session.mode === SessionMode.EDIT_FIELD || session.mode === SessionMode.EDIT_LYRICS)) {
-    await ctx.reply("Text messages are not yet handled in this port.");
     return;
   }
 
