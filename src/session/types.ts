@@ -38,11 +38,22 @@ export interface LyricsFlowData extends BaseFlowData {
   messageIds: number[];
 }
 
+export interface TranslationCacheEntry {
+  originalHash: string;
+  text: string;
+}
+
 export interface TelegraphFlowData extends BaseFlowData {
   url?: string;
   path?: string;
   data?: unknown;
-  currentLyrics?: string;
+  originalLyrics?: string;
+  translatedLyrics?: Record<string, TranslationCacheEntry>;
+  activeLang?: string;
+  sourceLang?: string;
+  translationRequestId?: string;
+  isTranslating?: boolean;
+  translateMessageId?: number;
 }
 
 export interface SessionData {
