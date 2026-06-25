@@ -4,11 +4,11 @@ const FLAG_MAP: Record<string, string> = {
   eng: "🇬🇧", fas: "🇮🇷", jpn: "🇯🇵", kor: "🇰🇷",
   spa: "🇪🇸", fra: "🇫🇷", deu: "🇩🇪", por: "🇧🇷",
   ara: "🇸🇦", tur: "🇹🇷", hin: "🇮🇳", ita: "🇮🇹",
-  rus: "🇷🇺", zho: "🇨🇳",
+  rus: "🇷🇺", zho: "🇨🇳", pes: "🇮🇷",
 };
 
 const FRANC_TO_LANG: Record<string, string> = {
-  eng: "en", fas: "fa",
+  eng: "en", fas: "fa", pes: "fa"
 };
 
 const CONFIDENCE_THRESHOLD = 0.8;

@@ -34,12 +34,15 @@ Adding a section label is considered a fatal formatting error.
 16. Lyrics should read naturally to a native speaker of the target language while preserving the original meaning.
 17. Avoid overly colloquial slang unless the original lyric is clearly colloquial.
 18. Preserve repetitions exactly. If the same source line appears multiple times, translate it the same way unless context requires otherwise.
-19. When translating Japanese lyrics, translate the meaning rather than attempting to preserve Japanese grammar structure.
-20. For Persian (فارسی) output specifically:
+19. Words, phrases, names, and expressions that are already written in the target language
+    should normally remain unchanged.
+    Do NOT translate them into another wording of the same language.
+20. When translating Japanese lyrics, translate the meaning rather than attempting to preserve Japanese grammar structure.
+21. For Persian (فارسی) output specifically:
     - Preserve the tone and emotion of the lyrics.
     - Use natural, fluent Persian writing.
-    - Use standard Persian half-spaces (ZWNJ(\u200C)) where appropriate
-      (e.g. نمی‌خوام, می‌خوام, رفته‌بود).`;
+    - Use standard spaces where appropriate
+      (e.g. رفته بود , می گویم).`;
 
   const user = lyrics;
 
