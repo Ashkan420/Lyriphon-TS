@@ -1,6 +1,7 @@
 import { Env } from "../../env";
 
 const MODELS = [
+  "gemini-3.1-flash-lite",
   "gemini-2.5-flash",
   "gemini-flash-latest",
 ];

@@ -8,6 +8,12 @@ export function buildTranslationPrompt(
 
 STRICT RULES — violating any rule makes the output invalid:
 1. Output EXACTLY the same number of lines as the input
+CRITICAL:
+Section labels such as [Verse], [Chorus], [Bridge], [Outro], [Intro], etc.
+MUST NEVER be generated.
+If the input does not contain a section label,
+the output must not contain a section label.
+Adding a section label is considered a fatal formatting error.
 2. Preserve line order — line N in input must correspond to line N in output
 3. Preserve blank lines at the same positions as the input
 4. Preserve section labels exactly as-is: [Verse], [Chorus], [Bridge], [Pre-Chorus],
@@ -28,7 +34,15 @@ STRICT RULES — violating any rule makes the output invalid:
 16. Lyrics should read naturally to a native speaker of the target language while preserving the original meaning.
 17. Avoid overly colloquial slang unless the original lyric is clearly colloquial.
 18. Preserve repetitions exactly. If the same source line appears multiple times, translate it the same way unless context requires otherwise.
-19. When translating Japanese lyrics, translate the meaning rather than attempting to preserve Japanese grammar structure.`;
+19. Words, phrases, names, and expressions that are already written in the target language
+    should normally remain unchanged.
+    Do NOT translate them into another wording of the same language.
+20. When translating Japanese lyrics, translate the meaning rather than attempting to preserve Japanese grammar structure.
+21. For Persian (فارسی) output specifically:
+    - Preserve the tone and emotion of the lyrics.
+    - Use natural, fluent Persian writing.
+    - Use standard spaces where appropriate
+      (e.g. رفته بود , می گویم).`;
 
   const user = lyrics;
 
