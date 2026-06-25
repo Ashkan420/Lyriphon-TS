@@ -5,6 +5,8 @@ import { createSongTelegraph, editSongPage } from "../services/telegraph";
 import { isValidUrl } from "../utils/urlValidation";
 import {
   safeDelete,
+  safeAnswer,
+  safeEdit,
   searchAndShowResults,
   attachAudioAndPromptChannel,
   cancelEdit,
@@ -79,13 +81,13 @@ export async function processTextMessage(ctx: Context, session: SessionData, env
 
 async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
   if (session.mode !== SessionMode.EDIT_LYRICS) {
-    try { await ctx.answerCallbackQuery({ text: "Not in lyrics editing mode", show_alert: true }); } catch {}
+    await safeAnswer(ctx, "Not in lyrics editing mode");
     return false;
   }
 
   const myVersion = captureVersion(session);
   if (session.lyrics.locked) {
-    try { await ctx.answerCallbackQuery({ text: "Already finalizing...", show_alert: true }); } catch {}
+    await safeAnswer(ctx, "Already finalizing...");
     return false;
   }
 
@@ -93,17 +95,17 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
   const lastData = session.telegraph.data as any;
   if (!lastData) {
     session.lyrics.locked = false;
-    try { await ctx.answerCallbackQuery({ text: "No song data found", show_alert: true }); } catch {}
+    await safeAnswer(ctx, "No song data found");
     return false;
   }
 
   if (!session.lyrics.buffer.length) {
     session.lyrics.locked = false;
-    try { await ctx.answerCallbackQuery({ text: "No lyrics to save", show_alert: true }); } catch {}
+    await safeAnswer(ctx, "No lyrics to save");
     return false;
   }
 
-  try { await ctx.answerCallbackQuery(); } catch {}
+  await safeAnswer(ctx);
 
   const fullLyrics = session.lyrics.buffer.join("\n");
   const chatId = ctx.chat?.id;
@@ -146,7 +148,7 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
 
 async function handleAudioDecisionCallback(ctx: Context, session: SessionData, env: Env) {
   const data = ctx.callbackQuery?.data;
-  try { await ctx.answerCallbackQuery(); } catch {}
+  await safeAnswer(ctx);
 
   const decision = session.audio.pendingDecision as any;
   if (!decision) {
@@ -234,11 +236,11 @@ async function handleAudioDecisionCallback(ctx: Context, session: SessionData, e
 
 async function handleEditFieldCallback(ctx: Context, session: SessionData) {
   if (session.mode === SessionMode.EDIT_FIELD || session.mode === SessionMode.EDIT_LYRICS) {
-    try { await ctx.api.answerCallbackQuery({ callback_query_id: ctx.callbackQuery?.id, text: "❌ You already have an active edit session", show_alert: true } as any); } catch {}
+    await safeAnswer(ctx, "❌ You already have an active edit session");
     return;
   }
 
-  try { await ctx.answerCallbackQuery(); } catch {}
+  await safeAnswer(ctx);
   const data = ctx.callbackQuery?.data ?? "";
   const field = data.replace("edit_field_", "");
   session.edit.field = field;
@@ -369,18 +371,18 @@ async function handleNewFieldValue(ctx: Context, session: SessionData, env: Env)
 
 async function handleCancelEditCallback(ctx: Context, session: SessionData) {
   if (session.mode !== SessionMode.EDIT_FIELD && session.mode !== SessionMode.EDIT_LYRICS) {
-    try { await ctx.api.answerCallbackQuery({ callback_query_id: ctx.callbackQuery?.id, text: "No active edit session", show_alert: true } as any); } catch {}
+    await safeAnswer(ctx, "No active edit session");
     return;
   }
 
-  try { await ctx.answerCallbackQuery(); } catch {}
+  await safeAnswer(ctx);
   await cancelEdit(ctx.api as any, ctx.chat?.id ?? 0, session);
   try { await ctx.editMessageText("❌ Edit cancelled"); } catch {}
 }
 
 async function handleDoneLyricsCallback(ctx: Context, session: SessionData, env: Env) {
   if (session.mode !== SessionMode.EDIT_LYRICS) {
-    try { await ctx.api.answerCallbackQuery({ callback_query_id: ctx.callbackQuery?.id, text: "No active edit session", show_alert: true } as any); } catch {}
+    await safeAnswer(ctx, "No active edit session");
     return;
   }
 
@@ -393,7 +395,7 @@ async function handleSendToChannelCallback(ctx: Context, session: SessionData) {
     return;
   }
 
-  try { await ctx.answerCallbackQuery(); } catch {}
+  await safeAnswer(ctx);
   const channelId = data.replace("send_channel_", "");
   const audioFileId = session.audio.pendingFileId;
   const caption = session.audio.pendingCaption;
@@ -408,12 +410,12 @@ async function handleSendToChannelCallback(ctx: Context, session: SessionData) {
   try {
     const member = await ctx.api.getChatMember(Number(channelId), Number(ctx.from?.id ?? 0));
     if (member.status !== "administrator" && member.status !== "creator") {
-      try { await ctx.answerCallbackQuery({ text: "❌ You are not an admin in this channel.", show_alert: true }); } catch {}
+      await safeAnswer(ctx, "❌ You are not an admin in this channel.");
       return;
     }
   } catch (error) {
     console.warn("Failed to verify admin status for channel", channelId, error);
-    try { await ctx.answerCallbackQuery({ text: "❌ Can't access this channel.", show_alert: true }); } catch {}
+    await safeAnswer(ctx, "❌ Can't access this channel.");
     return;
   }
 
@@ -438,7 +440,7 @@ async function handleSendToChannelCallback(ctx: Context, session: SessionData) {
 }
 
 async function handleTrackSelectionCallback(ctx: Context, session: SessionData, env: Env) {
-  try { await ctx.answerCallbackQuery(); } catch {}
+  await safeAnswer(ctx);
   const data = ctx.callbackQuery?.data;
   if (!data || !data.startsWith("track_")) {
     return;
@@ -514,8 +516,7 @@ async function handleTrackSelectionCallback(ctx: Context, session: SessionData, 
   session.telegraph.translatedLyrics = undefined;
   session.telegraph.activeLang = undefined;
   session.telegraph.translationRequestId = undefined;
-  session.telegraph.isTranslating = false;
-  session.telegraph.translateMessageId = undefined;
+  resetTranslationState(session);
 
   const pendingAudioFileId = session.audio.fileId;
   const hasAudio = Boolean(pendingAudioFileId);
@@ -595,14 +596,14 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
 
   if (data === "translate:open") {
     if (!session.telegraph.originalLyrics) {
-      try { await ctx.answerCallbackQuery({ text: "No lyrics to translate", show_alert: true }); } catch {}
+      await safeAnswer(ctx, "No lyrics to translate");
       return;
     }
     if (session.telegraph.isTranslating) {
-      try { await ctx.answerCallbackQuery({ text: "Translation in progress", show_alert: true }); } catch {}
+      await safeAnswer(ctx, "Translation in progress");
       return;
     }
-    try { await ctx.answerCallbackQuery(); } catch {}
+    await safeAnswer(ctx);
 
     const chatId = ctx.chat?.id;
     if (!chatId) return;
@@ -614,7 +615,7 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
   }
 
   if (data === "translate:cancel") {
-    try { await ctx.answerCallbackQuery(); } catch {}
+    await safeAnswer(ctx);
     const msgId = session.telegraph.translateMessageId;
     if (msgId && chatId(ctx)) {
       await safeDelete(ctx.api as any, chatId(ctx)!, msgId);
@@ -626,25 +627,18 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
   if (data === "translate:retry") {
     const pendingLang = session.telegraph.pendingTranslationLang;
     if (!pendingLang) {
-      try { await ctx.answerCallbackQuery({ text: "No pending translation", show_alert: true }); } catch {}
+      await safeAnswer(ctx, "No pending translation");
       return;
     }
 
-    try { await ctx.answerCallbackQuery(); } catch {}
+    await safeAnswer(ctx);
 
     const pickerMsgId = session.telegraph.translateMessageId;
     const cid = chatId(ctx);
     const cooldownUntil = session.telegraph.translationCooldownUntil ?? 0;
 
     if (Date.now() < cooldownUntil) {
-      const remaining = Math.ceil((cooldownUntil - Date.now()) / 1000);
-      if (pickerMsgId && cid) {
-        try {
-          await ctx.api.editMessageText(cid, pickerMsgId,
-            `⏳ Gemini is rate-limited.\nPlease wait ${remaining}s and try again.`,
-            { reply_markup: { inline_keyboard: buildRateLimitKeyboard() } });
-        } catch {}
-      }
+      await showRateLimitCooldown(ctx, cid, pickerMsgId, (cooldownUntil - Date.now()) / 1000);
       return;
     }
 
@@ -653,12 +647,12 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
   }
 
   if (data === "translate:lang:original") {
-    try { await ctx.answerCallbackQuery(); } catch {}
+    await safeAnswer(ctx);
     const lastData = session.telegraph.data as any;
     if (!lastData || !session.telegraph.originalLyrics) {
       const msgId = session.telegraph.translateMessageId;
       if (msgId && chatId(ctx)) {
-        try { await ctx.api.editMessageText(chatId(ctx)!, msgId, "❌ No song data found."); } catch {}
+        await safeEdit(ctx.api, chatId(ctx)!, msgId, "❌ No song data found.");
       }
       return;
     }
@@ -668,16 +662,14 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
       console.warn("Failed to update Telegraph for original lyrics", error);
       const msgId = session.telegraph.translateMessageId;
       if (msgId && chatId(ctx)) {
-        try { await ctx.api.editMessageText(chatId(ctx)!, msgId, "❌ Failed to update Telegraph page"); } catch {}
+        await safeEdit(ctx.api, chatId(ctx)!, msgId, "❌ Failed to update Telegraph page");
       }
       return;
     }
     session.telegraph.activeLang = "original";
     const msgId = session.telegraph.translateMessageId;
     if (msgId && chatId(ctx)) {
-      try {
-        await ctx.api.editMessageText(chatId(ctx)!, msgId, "✅ Restored original lyrics");
-      } catch {}
+      await safeEdit(ctx.api, chatId(ctx)!, msgId, "✅ Restored original lyrics");
     }
     session.telegraph.translateMessageId = undefined;
     return;
@@ -687,28 +679,28 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
     const langCode = data.replace("translate:lang:", "");
 
     if (session.telegraph.isTranslating) {
-      try { await ctx.answerCallbackQuery({ text: "Translation in progress", show_alert: true }); } catch {}
+      await safeAnswer(ctx, "Translation in progress");
       return;
     }
 
     if (session.telegraph.activeLang === langCode) {
-      try { await ctx.answerCallbackQuery({ text: "Already showing this language", show_alert: true }); } catch {}
+      await safeAnswer(ctx, "Already showing this language");
       return;
     }
 
     const language = findLanguage(langCode);
     if (!language) {
-      try { await ctx.answerCallbackQuery({ text: "Unsupported language", show_alert: true }); } catch {}
+      await safeAnswer(ctx, "Unsupported language");
       return;
     }
 
-    try { await ctx.answerCallbackQuery(); } catch {}
+    await safeAnswer(ctx);
 
     const originalLyrics = session.telegraph.originalLyrics;
     if (!originalLyrics) {
       const msgId = session.telegraph.translateMessageId;
       if (msgId && chatId(ctx)) {
-        try { await ctx.api.editMessageText(chatId(ctx)!, msgId, "❌ No lyrics to translate."); } catch {}
+        await safeEdit(ctx.api, chatId(ctx)!, msgId, "❌ No lyrics to translate.");
       }
       return;
     }
@@ -728,18 +720,12 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
             await editSongPage(env, lastData, combined);
           } catch (error) {
             console.warn("Failed to update Telegraph for cached translation", error);
-            if (pickerMsgId && cid) {
-              try { await ctx.api.editMessageText(cid, pickerMsgId, "❌ Failed to update Telegraph page"); } catch {}
-            }
+            await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Failed to update Telegraph page");
             return;
           }
         }
         session.telegraph.activeLang = langCode;
-        if (pickerMsgId && cid) {
-          try {
-            await ctx.api.editMessageText(cid, pickerMsgId, `✅ ${language.name} lyrics added. `);
-          } catch {}
-        }
+        await safeEdit(ctx.api, cid!, pickerMsgId!, `✅ ${language.name} lyrics added. `);
         session.telegraph.translateMessageId = undefined;
         return;
       }
@@ -752,6 +738,25 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
 
 function chatId(ctx: Context): number | undefined {
   return ctx.chat?.id;
+}
+
+function resetTranslationState(session: SessionData) {
+  session.telegraph.isTranslating = false;
+  session.telegraph.translateMessageId = undefined;
+}
+
+async function showRateLimitCooldown(
+  ctx: Context,
+  cid: number | undefined,
+  pickerMsgId: number | undefined,
+  secondsRemaining: number,
+) {
+  const remaining = Math.ceil(secondsRemaining);
+  if (pickerMsgId && cid) {
+    await safeEdit(ctx.api, cid, pickerMsgId,
+      `⏳ Gemini is rate-limited.\nPlease wait ${remaining}s and try again.`,
+      { inline_keyboard: buildRateLimitKeyboard() });
+  }
 }
 
 async function executeTranslation(
@@ -767,22 +772,13 @@ async function executeTranslation(
 
   const originalLyrics = session.telegraph.originalLyrics;
   if (!originalLyrics) {
-    if (pickerMsgId && cid) {
-      try { await ctx.api.editMessageText(cid, pickerMsgId, "❌ No lyrics to translate."); } catch {}
-    }
+    await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ No lyrics to translate.");
     return;
   }
 
   const cooldownUntil = session.telegraph.translationCooldownUntil ?? 0;
   if (Date.now() < cooldownUntil) {
-    const remaining = Math.ceil((cooldownUntil - Date.now()) / 1000);
-    if (pickerMsgId && cid) {
-      try {
-        await ctx.api.editMessageText(cid, pickerMsgId,
-          `⏳ Gemini is rate-limited.\nPlease wait ${remaining}s and try again.`,
-          { reply_markup: { inline_keyboard: buildRateLimitKeyboard() } });
-      } catch {}
-    }
+    await showRateLimitCooldown(ctx, cid, pickerMsgId, (cooldownUntil - Date.now()) / 1000);
     return;
   }
 
@@ -792,27 +788,16 @@ async function executeTranslation(
   session.telegraph.translationRequestId = requestId;
   const snapshotOriginal = originalLyrics;
 
-  if (pickerMsgId && cid) {
-    try {
-      await ctx.api.editMessageText(cid, pickerMsgId, "🌐 Translating lyrics...\nPlease wait (~10–20s)");
-    } catch {}
-  }
+  await safeEdit(ctx.api, cid!, pickerMsgId!, "🌐 Translating lyrics...\nPlease wait (~10–20s)");
 
   let rawResult: string | null = null;
   try {
     const result = await translateLyrics(env, snapshotOriginal, langCode as LanguageCode);
 
     if (result.type === "rate_limited") {
-      session.telegraph.isTranslating = false;
+      resetTranslationState(session);
       session.telegraph.translationCooldownUntil = Date.now() + result.retryAfterSeconds * 1000;
-      const waitSecs = Math.ceil(result.retryAfterSeconds);
-      if (pickerMsgId && cid) {
-        try {
-          await ctx.api.editMessageText(cid, pickerMsgId,
-            `⏳ Gemini is rate-limited.\nPlease wait ${waitSecs}s and try again.`,
-            { reply_markup: { inline_keyboard: buildRateLimitKeyboard() } });
-        } catch {}
-      }
+      await showRateLimitCooldown(ctx, cid, pickerMsgId, result.retryAfterSeconds);
       return;
     }
 
@@ -824,23 +809,19 @@ async function executeTranslation(
   }
 
   if (session.telegraph.translationRequestId !== requestId) {
-    session.telegraph.isTranslating = false;
+    resetTranslationState(session);
     return;
   }
 
   if (snapshotOriginal !== session.telegraph.originalLyrics) {
-    session.telegraph.isTranslating = false;
-    if (pickerMsgId && cid) {
-      try { await ctx.api.editMessageText(cid, pickerMsgId, "❌ Session changed during translation. Try again."); } catch {}
-    }
+    resetTranslationState(session);
+    await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Session changed during translation. Try again.");
     return;
   }
 
   if (!rawResult) {
-    session.telegraph.isTranslating = false;
-    if (pickerMsgId && cid) {
-      try { await ctx.api.editMessageText(cid, pickerMsgId, "❌ Translation failed. try again later."); } catch {}
-    }
+    resetTranslationState(session);
+    await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Translation failed. try again later.");
     return;
   }
 
@@ -859,24 +840,15 @@ async function executeTranslation(
       lang: langCode,
     });
 
-    if (pickerMsgId && cid) {
-      try { await ctx.api.editMessageText(cid, pickerMsgId, "🔄 Retrying translation..."); } catch {}
-    }
+    await safeEdit(ctx.api, cid!, pickerMsgId!, "🔄 Retrying translation...");
 
     try {
       const retryResult = await translateLyrics(env, snapshotOriginal, langCode as LanguageCode);
 
       if (retryResult.type === "rate_limited") {
-        session.telegraph.isTranslating = false;
+        resetTranslationState(session);
         session.telegraph.translationCooldownUntil = Date.now() + retryResult.retryAfterSeconds * 1000;
-        const waitSecs = Math.ceil(retryResult.retryAfterSeconds);
-        if (pickerMsgId && cid) {
-          try {
-            await ctx.api.editMessageText(cid, pickerMsgId,
-              `⏳ Gemini is rate-limited.\nPlease wait ${waitSecs}s and try again.`,
-              { reply_markup: { inline_keyboard: buildRateLimitKeyboard() } });
-          } catch {}
-        }
+        await showRateLimitCooldown(ctx, cid, pickerMsgId, retryResult.retryAfterSeconds);
         return;
       }
 
@@ -894,11 +866,9 @@ async function executeTranslation(
 
     if (!combined) {
       delete session.telegraph.translatedLyrics[cacheKey];
-      session.telegraph.isTranslating = false;
+      resetTranslationState(session);
       console.warn("translation retry also failed to produce matching line count");
-      if (pickerMsgId && cid) {
-        try { await ctx.api.editMessageText(cid, pickerMsgId, "❌ Translation format error — try again"); } catch {}
-      }
+      await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Translation format error — try again");
       return;
     }
   }
@@ -909,22 +879,15 @@ async function executeTranslation(
       await editSongPage(env, lastData, combined);
     } catch (error) {
       console.warn("Failed to update Telegraph after translation", error);
-      session.telegraph.isTranslating = false;
-      if (pickerMsgId && cid) {
-        try { await ctx.api.editMessageText(cid, pickerMsgId, "❌ Failed to update Telegraph page"); } catch {}
-      }
+      resetTranslationState(session);
+      await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Failed to update Telegraph page");
       return;
     }
   }
 
   session.telegraph.activeLang = langCode;
-  session.telegraph.isTranslating = false;
-  if (pickerMsgId && cid) {
-    try {
-      await ctx.api.editMessageText(cid, pickerMsgId, `✅ Lyrics translated to ${language.name}`);
-    } catch {}
-  }
-  session.telegraph.translateMessageId = undefined;
+  resetTranslationState(session);
+  await safeEdit(ctx.api, cid!, pickerMsgId!, `✅ Lyrics translated to ${language.name}`);
 }
 
 function buildRateLimitKeyboard(): InlineKeyboardButton[][] {

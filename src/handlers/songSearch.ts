@@ -4,7 +4,7 @@ import { searchTracks } from "../services/deezer";
 import { SessionData, SessionMode } from "../session/types";
 import { clearAudioState } from "../session/flows";
 import { inMode } from "../session/transitions";
-import { searchAndShowResults, safeDelete } from "../utils/telegram";
+import { searchAndShowResults, safeDelete, safeAnswer } from "../utils/telegram";
 
 const PAGE_SIZE = 5;
 
@@ -73,7 +73,7 @@ export async function songSearchCommand(ctx: Context, session: SessionData) {
 }
 
 export async function handleSearchPageCallback(ctx: Context, session: SessionData) {
-  try { await ctx.answerCallbackQuery(); } catch {}
+  await safeAnswer(ctx);
 
   const data = ctx.callbackQuery?.data;
   if (!data || !data.startsWith("search_page_")) {
