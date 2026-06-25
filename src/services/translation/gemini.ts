@@ -9,18 +9,29 @@ const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models
 const TIMEOUT_MS = 30000;
 const MAX_ATTEMPTS = 3;
 
+export type GeminiResult =
+  | { type: "success"; text: string }
+  | { type: "rate_limited"; retryAfterSeconds: number }
+  | { type: "error" };
+
 function isRetryable(status: number): boolean {
-  return status === 503 || status === 429;
+  return status === 503;
+}
+
+function parseRetryAfter(body: string): number {
+  const match = body.match(/Please retry in ([\d.]+)s/);
+  if (match) return parseFloat(match[1]);
+  return 60;
 }
 
 export async function geminiTranslate(
   env: Env,
   systemPrompt: string,
   userPrompt: string,
-): Promise<string | null> {
+): Promise<GeminiResult> {
   if (!env.GEMINI_API_KEY) {
     console.warn("geminiTranslate: GEMINI_API_KEY not configured");
-    return null;
+    return { type: "error" };
   }
 
   for (const model of MODELS) {
@@ -66,6 +77,12 @@ export async function geminiTranslate(
             body: errorText?.slice(0, 1000),
             durationMs: Date.now() - startTime,
           });
+
+          if (response.status === 429) {
+            const retryAfterSeconds = parseRetryAfter(errorText);
+            console.log("geminiTranslate:rate_limited", { model, retryAfterSeconds });
+            return { type: "rate_limited", retryAfterSeconds };
+          }
 
           if (isRetryable(response.status) && attempt < MAX_ATTEMPTS - 1) {
             const delay = Math.pow(2, attempt) * 500 + Math.random() * 300;
@@ -130,7 +147,7 @@ export async function geminiTranslate(
           durationMs: Date.now() - startTime,
           textLength: text.length,
         });
-        return text;
+        return { type: "success", text };
       } catch (error: any) {
         console.warn("geminiTranslate:catch", {
           model,
@@ -157,5 +174,5 @@ export async function geminiTranslate(
   }
 
   console.warn("geminiTranslate:all_models_exhausted");
-  return null;
+  return { type: "error" };
 }
