@@ -23,6 +23,7 @@ import { SessionData } from "../session/types";
 import { transition } from "../session/transitions";
 import { Env } from "../env";
 import { translateLyrics } from "../services/translation";
+import { detectLanguage, getFlag, isLanguageDetected } from "../services/translation/detect";
 import { combineLyricsWithTranslation } from "../services/translation/combine";
 import { SUPPORTED_LANGUAGES, findLanguage, type LanguageCode } from "../services/translation/types";
 import type { InlineKeyboardButton } from "@grammyjs/types";
@@ -136,6 +137,7 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
   }
 
   session.telegraph.originalLyrics = fullLyrics;
+  session.telegraph.detectedLang = detectLanguage(fullLyrics) ?? undefined;
   session.telegraph.translatedLyrics = undefined;
   session.telegraph.activeLang = "original";
   await transition(session, SessionMode.IDLE, ctx.api, chatId);
@@ -510,6 +512,7 @@ async function handleTrackSelectionCallback(ctx: Context, session: SessionData, 
   }
 
   session.telegraph.originalLyrics = lyrics;
+  session.telegraph.detectedLang = detectLanguage(lyrics) ?? undefined;
   session.telegraph.url = telegraphResult.url;
   session.telegraph.path = telegraphResult.path;
   session.telegraph.data = telegraphResult.lastData;
@@ -694,6 +697,10 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
       return;
     }
 
+    if (isLanguageDetected(session.telegraph.detectedLang, langCode)) {
+      await safeAnswer(ctx, "Lyrics already appear to be in this language.");
+      return;
+    }
     await safeAnswer(ctx);
 
     const originalLyrics = session.telegraph.originalLyrics;
@@ -900,17 +907,21 @@ function buildRateLimitKeyboard(): InlineKeyboardButton[][] {
 }
 
 function buildLanguagePickerKeyboard(session: SessionData): InlineKeyboardButton[][] {
-  const buttons: InlineKeyboardButton[][] = [
-    [
-      { text: "🇬🇧 English", callback_data: "translate:lang:en" },
-      { text: "🇮🇷 فارسی", callback_data: "translate:lang:fa" },
-    ],
-  ];
+  const detected = session.telegraph.detectedLang;
+  const buttons: InlineKeyboardButton[][] = [[]];
+
+  for (const lang of SUPPORTED_LANGUAGES) {
+    buttons[0].push({ text: lang.nativeName, callback_data: `translate:lang:${lang.code}` });
+  }
+
   const hasCachedTranslation = session.telegraph.translatedLyrics &&
     Object.keys(session.telegraph.translatedLyrics).length > 0;
   if (hasCachedTranslation && session.telegraph.activeLang !== "original") {
-    buttons.unshift([{ text: "Original", callback_data: "translate:lang:original" }]);
+    const flag = detected ? getFlag(detected) : "";
+    const label = flag ? `${flag} Original` : "Original";
+    buttons.unshift([{ text: label, callback_data: "translate:lang:original" }]);
   }
+
   buttons.push([{ text: "❌ Cancel", callback_data: "translate:cancel" }]);
   return buttons;
 }
