@@ -34,21 +34,3 @@ STRICT RULES — violating any rule makes the output invalid:
 
   return { system, user };
 }
-
-export function buildFixPrompt(
-  originalLyrics: string,
-  translatedLyrics: string,
-  originalCount: number,
-  translatedCount: number,
-): { system: string; user: string } {
-  const system = `You are a lyrics line-count fixer. The translated lyrics have ${translatedCount} lines but the original has ${originalCount}.
-Fix the translation so it has EXACTLY ${originalCount} lines, matching the original line-by-line.
-Preserve the translation quality. Do NOT add or remove lines beyond what's needed to match the count.
-Preserve section labels ([Verse], [Chorus], etc.) exactly as-is.
-Keep parenthetical annotations (artist names, sample credits) in English.
-Output ONLY the fixed translation, ${originalCount} lines, nothing else.`;
-
-  const user = `Original:\n${originalLyrics}\n\nCurrent translation:\n${translatedLyrics}`;
-
-  return { system, user };
-}
