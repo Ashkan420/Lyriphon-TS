@@ -6,8 +6,6 @@ This repository is being migrated to a Cloudflare Workers + grammY TypeScript pr
 - `python/` contains the legacy Python bot runtime and tests for reference.
 - D1 is the current storage target for the root project.
 
-> The original Python runtime is preserved under `python/`. Use `python/README.md` for legacy Python setup.
-
 ---
 
 ## Root project layout
