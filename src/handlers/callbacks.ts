@@ -20,7 +20,7 @@ import { clearAudioState } from "../session/flows";
 import { SessionData } from "../session/types";
 import { transition } from "../session/transitions";
 import { Env } from "../env";
-import { translateLyrics } from "../services/translation";
+import { translateLyrics, fixTranslationLines } from "../services/translation";
 import { combineLyricsWithTranslation } from "../services/translation/combine";
 import { SUPPORTED_LANGUAGES, findLanguage, type LanguageCode } from "../services/translation/types";
 import type { InlineKeyboardButton } from "@grammyjs/types";
@@ -852,18 +852,60 @@ async function executeTranslation(
   }
   session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: rawResult };
 
-  const combined = combineLyricsWithTranslation(snapshotOriginal, rawResult);
+  let combined = combineLyricsWithTranslation(snapshotOriginal, rawResult);
   if (!combined) {
-    delete session.telegraph.translatedLyrics[cacheKey];
-    session.telegraph.isTranslating = false;
-    console.warn("combineLyricsWithTranslation failed after successful translation", {
+    console.warn("combineLyricsWithTranslation failed, attempting line fix", {
       provider: env.TRANSLATION_PROVIDER ?? "gemini",
       lang: langCode,
     });
+
     if (pickerMsgId && cid) {
-      try { await ctx.api.editMessageText(cid, pickerMsgId, "❌ Translation format error — try again"); } catch {}
+      try { await ctx.api.editMessageText(cid, pickerMsgId, "🔧 Fixing translation format..."); } catch {}
     }
-    return;
+
+    let fixedResult: string | null = null;
+    try {
+      const fixResult = await fixTranslationLines(env, snapshotOriginal, rawResult);
+
+      if (fixResult.type === "rate_limited") {
+        session.telegraph.isTranslating = false;
+        session.telegraph.translationCooldownUntil = Date.now() + fixResult.retryAfterSeconds * 1000;
+        const waitSecs = Math.ceil(fixResult.retryAfterSeconds);
+        if (pickerMsgId && cid) {
+          try {
+            await ctx.api.editMessageText(cid, pickerMsgId,
+              `⏳ Gemini is rate-limited.\nPlease wait ${waitSecs}s and try again.`,
+              { reply_markup: { inline_keyboard: buildRateLimitKeyboard() } });
+          } catch {}
+        }
+        return;
+      }
+
+      if (fixResult.type === "success") {
+        fixedResult = fixResult.text;
+      }
+    } catch (error) {
+      console.warn("fixTranslationLines threw unexpectedly", error);
+    }
+
+    if (fixedResult) {
+      const fixedCombined = combineLyricsWithTranslation(snapshotOriginal, fixedResult);
+      if (fixedCombined) {
+        rawResult = fixedResult;
+        session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: fixedResult };
+        combined = fixedCombined;
+      }
+    }
+
+    if (!combined) {
+      delete session.telegraph.translatedLyrics[cacheKey];
+      session.telegraph.isTranslating = false;
+      console.warn("fixTranslationLines also failed to produce matching line count");
+      if (pickerMsgId && cid) {
+        try { await ctx.api.editMessageText(cid, pickerMsgId, "❌ Translation format error — try again"); } catch {}
+      }
+      return;
+    }
   }
 
   const lastData = session.telegraph.data as any;

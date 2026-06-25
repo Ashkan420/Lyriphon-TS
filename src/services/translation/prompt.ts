@@ -18,11 +18,37 @@ STRICT RULES — violating any rule makes the output invalid:
 7. Do NOT add lines that don't exist in the input
 8. Do NOT remove lines that exist in the input
 9. Do NOT add explanations, commentary, or numbering
-10. Preserve all Unicode characters exactly — do not normalize, strip, or alter
-    any special characters (ZWJ, ZWNJ, diacritics, etc.)
-11. Output ONLY the translated lyrics — nothing else`;
+10. Preserve punctuation and formatting where possible.
+11. Output ONLY the translated lyrics — nothing else
+12. If the input has a section label like [Chorus] followed by a blank line,
+    keep that blank line. Do NOT fill it with repeated lyrics.
+13. Translate for meaning, tone, and emotional intent, not word-for-word literal accuracy.
+14. Song titles, recurring nicknames, catchphrases, and iconic proper nouns should usually remain untranslated unless a natural translation is clearly preferable in the target language.
+15. Maintain consistency throughout the entire song. If a phrase is translated one way, keep the same translation whenever it appears again.
+16. Lyrics should read naturally to a native speaker of the target language while preserving the original meaning.
+17. Avoid overly colloquial slang unless the original lyric is clearly colloquial.
+18. Preserve repetitions exactly. If the same source line appears multiple times, translate it the same way unless context requires otherwise.
+19. When translating Japanese lyrics, translate the meaning rather than attempting to preserve Japanese grammar structure.`;
 
   const user = lyrics;
+
+  return { system, user };
+}
+
+export function buildFixPrompt(
+  originalLyrics: string,
+  translatedLyrics: string,
+  originalCount: number,
+  translatedCount: number,
+): { system: string; user: string } {
+  const system = `You are a lyrics line-count fixer. The translated lyrics have ${translatedCount} lines but the original has ${originalCount}.
+Fix the translation so it has EXACTLY ${originalCount} lines, matching the original line-by-line.
+Preserve the translation quality. Do NOT add or remove lines beyond what's needed to match the count.
+Preserve section labels ([Verse], [Chorus], etc.) exactly as-is.
+Keep parenthetical annotations (artist names, sample credits) in English.
+Output ONLY the fixed translation, ${originalCount} lines, nothing else.`;
+
+  const user = `Original:\n${originalLyrics}\n\nCurrent translation:\n${translatedLyrics}`;
 
   return { system, user };
 }

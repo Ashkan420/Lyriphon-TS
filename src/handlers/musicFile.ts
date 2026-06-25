@@ -18,6 +18,11 @@ export async function handleMusicFile(ctx: Context, session: SessionData) {
     return;
   }
 
+  if (session.audio.sendChannelPromptId) {
+    await safeDelete(ctx.api, chatId, session.audio.sendChannelPromptId);
+    session.audio.sendChannelPromptId = undefined;
+  }
+
   const titleCandidate = message.audio?.title;
   const artistCandidate = message.audio?.performer;
   const filename = message.audio?.file_name ?? "Unknown";
