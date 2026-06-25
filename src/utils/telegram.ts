@@ -1,10 +1,12 @@
 import { Api, type RawApi } from "grammy";
 import { D1Database } from "@cloudflare/workers-types";
+import { Context } from "grammy";
 import { getUserChannels } from "../db/channels";
 import { SessionData, SessionMode } from "../session/types";
 import { transition } from "../session/transitions";
 import { resetFlow } from "../session/flows";
 import { escapeMd as escapeMdUtil } from "./escapeMd";
+import type { InlineKeyboardMarkup } from "@grammyjs/types";
 
 export function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
@@ -18,6 +20,30 @@ export async function safeDelete(bot: Api<RawApi>, chatId: number, messageId: nu
   } catch {
     // ignore
   }
+}
+
+export async function safeAnswer(ctx: Context, text?: string): Promise<void> {
+  try {
+    if (text) {
+      await ctx.answerCallbackQuery({ text, show_alert: true } as any);
+    } else {
+      await ctx.answerCallbackQuery();
+    }
+  } catch {}
+}
+
+export async function safeEdit(
+  api: any,
+  chatId: number,
+  messageId: number,
+  text: string,
+  markup?: InlineKeyboardMarkup,
+): Promise<void> {
+  try {
+    const opts: any = {};
+    if (markup) opts.reply_markup = markup;
+    await api.editMessageText(chatId, messageId, text, opts);
+  } catch {}
 }
 
 export async function delayedDelete(
