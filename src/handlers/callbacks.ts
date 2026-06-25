@@ -624,6 +624,9 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
       await safeDelete(ctx.api as any, chatId(ctx)!, msgId);
     }
     session.telegraph.translateMessageId = undefined;
+    session.telegraph.translationCooldownUntil = undefined;
+    session.telegraph.pendingTranslationLang = undefined;
+    session.telegraph.isTranslating = false;
     return;
   }
 
@@ -641,10 +644,11 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
     const cooldownUntil = session.telegraph.translationCooldownUntil ?? 0;
 
     if (Date.now() < cooldownUntil) {
-      await showRateLimitCooldown(ctx, cid, pickerMsgId, (cooldownUntil - Date.now()) / 1000);
+      await showRateLimitCooldown(ctx, cid, pickerMsgId, cooldownUntil);
       return;
     }
 
+    session.telegraph.translationCooldownUntil = undefined;
     await executeTranslation(ctx, session, env, pendingLang, pickerMsgId, cid);
     return;
   }
@@ -756,9 +760,9 @@ async function showRateLimitCooldown(
   ctx: Context,
   cid: number | undefined,
   pickerMsgId: number | undefined,
-  secondsRemaining: number,
+  cooldownUntil: number,
 ) {
-  const remaining = Math.ceil(secondsRemaining);
+  const remaining = Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000));
   if (pickerMsgId && cid) {
     await safeEdit(ctx.api, cid, pickerMsgId,
       `⏳ Gemini is rate-limited.\nPlease wait ${remaining}s and try again.`,
@@ -785,7 +789,7 @@ async function executeTranslation(
 
   const cooldownUntil = session.telegraph.translationCooldownUntil ?? 0;
   if (Date.now() < cooldownUntil) {
-    await showRateLimitCooldown(ctx, cid, pickerMsgId, (cooldownUntil - Date.now()) / 1000);
+    await showRateLimitCooldown(ctx, cid, pickerMsgId, cooldownUntil);
     return;
   }
 
@@ -802,9 +806,10 @@ async function executeTranslation(
     const result = await translateLyrics(env, snapshotOriginal, langCode as LanguageCode);
 
     if (result.type === "rate_limited") {
-      resetTranslationState(session);
-      session.telegraph.translationCooldownUntil = Date.now() + result.retryAfterSeconds * 1000;
-      await showRateLimitCooldown(ctx, cid, pickerMsgId, result.retryAfterSeconds);
+      session.telegraph.isTranslating = false;
+      const cooldownUntil = Date.now() + result.retryAfterSeconds * 1000;
+      session.telegraph.translationCooldownUntil = cooldownUntil;
+      await showRateLimitCooldown(ctx, cid, pickerMsgId, cooldownUntil);
       return;
     }
 
@@ -853,9 +858,10 @@ async function executeTranslation(
       const retryResult = await translateLyrics(env, snapshotOriginal, langCode as LanguageCode);
 
       if (retryResult.type === "rate_limited") {
-        resetTranslationState(session);
-        session.telegraph.translationCooldownUntil = Date.now() + retryResult.retryAfterSeconds * 1000;
-        await showRateLimitCooldown(ctx, cid, pickerMsgId, retryResult.retryAfterSeconds);
+        session.telegraph.isTranslating = false;
+        const cooldownUntil = Date.now() + retryResult.retryAfterSeconds * 1000;
+        session.telegraph.translationCooldownUntil = cooldownUntil;
+        await showRateLimitCooldown(ctx, cid, pickerMsgId, cooldownUntil);
         return;
       }
 
