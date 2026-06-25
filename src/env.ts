@@ -4,6 +4,8 @@ export interface Env {
   WEBHOOK_SECRET_TOKEN: string;
   BOT_OWNER_ID?: string;
   WEBHOOK_PATH?: string;
+  TRANSLATION_PROVIDER?: string;
+  GEMINI_API_KEY?: string;
   DB: D1Database;
   SESSION_DO: DurableObjectNamespace;
 }

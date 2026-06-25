@@ -4,6 +4,7 @@ import { SessionData, SessionMode } from "../session/types";
 import { clearAudioState } from "../session/flows";
 import { inMode, transition } from "../session/transitions";
 import { searchAndShowResults, safeDelete } from "../utils/telegram";
+import { buildTrackButtons } from "./songSearch";
 
 export async function handleMusicFile(ctx: Context, session: SessionData) {
   const message = ctx.message;
@@ -15,6 +16,11 @@ export async function handleMusicFile(ctx: Context, session: SessionData) {
   if (message.media_group_id) {
     await ctx.reply("❌ Please send only one music file at a time.");
     return;
+  }
+
+  if (session.audio.sendChannelPromptId) {
+    await safeDelete(ctx.api, chatId, session.audio.sendChannelPromptId);
+    session.audio.sendChannelPromptId = undefined;
   }
 
   const titleCandidate = message.audio?.title;
@@ -83,15 +89,7 @@ export async function handleMusicFile(ctx: Context, session: SessionData) {
     session,
     searchQuery,
     displayLabel,
-    (results, page) => {
-      const start = (page ?? 0) * 5;
-      return results.slice(start, start + 5).map((item) => [
-        {
-          text: `${item?.title ?? "Unknown"} - ${item?.artist?.name ?? "Unknown"} (${Math.floor((item?.duration ?? 0) / 60)}:${String((item?.duration ?? 0) % 60).padStart(2, "0")})`,
-          callback_data: `track_${item?.id}`,
-        },
-      ]);
-    },
+    buildTrackButtons,
     searchTracks,
   );
 
