@@ -46,7 +46,13 @@ export function createTelegraphFlow(): TelegraphFlowData {
     url: undefined,
     path: undefined,
     data: undefined,
-    currentLyrics: undefined,
+    originalLyrics: undefined,
+    translatedLyrics: undefined,
+    activeLang: undefined,
+    sourceLang: undefined,
+    translationRequestId: undefined,
+    isTranslating: false,
+    translateMessageId: undefined,
   };
 }
 
@@ -116,7 +122,13 @@ export function resetFlow(flow: AudioFlowData | SearchFlowData | EditFlowData | 
     flow.url = undefined;
     flow.path = undefined;
     flow.data = undefined;
-    flow.currentLyrics = undefined;
+    flow.originalLyrics = undefined;
+    flow.translatedLyrics = undefined;
+    flow.activeLang = undefined;
+    flow.sourceLang = undefined;
+    flow.translationRequestId = undefined;
+    flow.isTranslating = false;
+    flow.translateMessageId = undefined;
     flow.locked = false;
     return;
   }

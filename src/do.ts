@@ -45,12 +45,20 @@ export class SessionDO {
     }
 
     console.log("Update received");
-    await this.state.blockConcurrencyWhile(async () => {
-      await this.loadSession();
-      await this.ensureBotInit();
-      await this.bot.handleUpdate(update as any);
-      await this.persistSession();
-    });
+    try {
+      await this.state.blockConcurrencyWhile(async () => {
+        await this.loadSession();
+        await this.ensureBotInit();
+        await this.bot.handleUpdate(update as any);
+        await this.persistSession();
+      });
+    } catch (error: any) {
+      if (error?.message?.includes("blockConcurrencyWhile")) {
+        console.warn("DO concurrency timeout — session will persist on next request");
+      } else {
+        throw error;
+      }
+    }
 
     return new Response(null, { status: 200 });
   }
