@@ -1,4 +1,5 @@
 import { SessionData, SessionMode } from "./types";
+import { warn } from "../utils/logger";
 
 export const VALID_TRANSITIONS: Record<SessionMode, SessionMode[] | null> = {
   [SessionMode.IDLE]: null,
@@ -25,7 +26,7 @@ async function cleanupEdit(chatId: number, session: SessionData, bot: { deleteMe
     try {
       await bot.deleteMessage(chatId, session.edit.promptId);
     } catch (error) {
-      console.warn("Cleanup: failed to delete edit prompt", session.edit.promptId, error);
+      warn("Cleanup: failed to delete edit prompt", session.edit.promptId, error);
     }
   }
 }
@@ -35,7 +36,7 @@ async function cleanupLyrics(chatId: number, session: SessionData, bot: { delete
     try {
       await bot.deleteMessage(chatId, messageId);
     } catch (error) {
-      console.warn("Cleanup: failed to delete lyrics message", messageId, error);
+      warn("Cleanup: failed to delete lyrics message", messageId, error);
     }
   }
 
@@ -43,7 +44,7 @@ async function cleanupLyrics(chatId: number, session: SessionData, bot: { delete
     try {
       await bot.deleteMessage(chatId, session.edit.promptId);
     } catch (error) {
-      console.warn("Cleanup: failed to delete edit prompt", session.edit.promptId, error);
+      warn("Cleanup: failed to delete edit prompt", session.edit.promptId, error);
     }
   }
 }
@@ -59,7 +60,7 @@ export async function transition(session: SessionData, toMode: SessionMode, bot:
 
   const allowed = VALID_TRANSITIONS[toMode];
   if (allowed !== null && !allowed.includes(oldMode)) {
-    console.warn(`Unexpected transition: ${oldMode} -> ${toMode} (expected from: ${allowed.join(", ")})`);
+    warn(`Unexpected transition: ${oldMode} -> ${toMode} (expected from: ${allowed.join(", ")})`);
   }
 
   session.version += 1;
@@ -69,7 +70,7 @@ export async function transition(session: SessionData, toMode: SessionMode, bot:
       try {
         await hook(chatId, session, bot);
       } catch (error) {
-        console.warn(`Cleanup hook failed for mode ${oldMode}:`, error);
+        warn(`Cleanup hook failed for mode ${oldMode}:`, error);
       }
     }
   }

@@ -7,11 +7,14 @@ import {
   safeDelete,
   safeAnswer,
   safeEdit,
+  safeEditMessage,
   searchAndShowResults,
   attachAudioAndPromptChannel,
   cancelEdit,
   escapeMd,
 } from "../utils/telegram";
+import { buildTrackButtons } from "./songSearch";
+import { warn } from "../utils/logger";
 import {
   resetFlow,
   SessionMode,
@@ -29,6 +32,19 @@ import { SUPPORTED_LANGUAGES, findLanguage, type LanguageCode } from "../service
 import type { InlineKeyboardButton } from "@grammyjs/types";
 
 const urlFields = ["track_link", "artist_link", "album_link", "cover"];
+
+// Wraps editSongPage so callers can branch on success without repeating the
+// try/catch + warn at every site. Callers handle their own state cleanup and
+// user-facing message based on the returned boolean.
+async function tryEditSongPage(env: Env, lastData: unknown, lyrics: string, context: string): Promise<boolean> {
+  try {
+    await editSongPage(env, lastData as any, lyrics);
+    return true;
+  } catch (error) {
+    warn(`Failed to update Telegraph page (${context})`, error);
+    return false;
+  }
+}
 
 export async function handleCallbackQuery(ctx: Context, session: SessionData, env: Env) {
   const data = ctx.callbackQuery?.data;
@@ -119,15 +135,12 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
     }
   }
 
-  try {
-    await editSongPage(env, lastData, fullLyrics);
-  } catch (error) {
-    console.warn("Failed to update Telegraph page during lyrics finalization", error);
+  if (!(await tryEditSongPage(env, lastData, fullLyrics, "lyrics finalization"))) {
     session.lyrics.locked = false;
     await transition(session, SessionMode.IDLE, ctx.api, chatId);
     resetFlow(session.lyrics);
     resetFlow(session.edit);
-    try { await ctx.editMessageText("❌ Failed to update Telegraph page"); } catch {}
+    await safeEditMessage(ctx, "❌ Failed to update Telegraph page");
     return false;
   }
 
@@ -144,7 +157,7 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
   resetFlow(session.lyrics);
   resetFlow(session.edit);
 
-  try { await ctx.editMessageText("✅ Lyrics Updated"); } catch {}
+  await safeEditMessage(ctx, "✅ Lyrics Updated");
   return true;
 }
 
@@ -212,15 +225,7 @@ async function handleAudioDecisionCallback(ctx: Context, session: SessionData, e
       session,
       searchQuery,
       displayLabel,
-      (results, page = 0) => {
-        const start = page * 5;
-        return results.slice(start, start + 5).map((item: any) => [
-          {
-            text: `${item?.title ?? "Unknown"} - ${item?.artist?.name ?? "Unknown"} (${Math.floor((item?.duration ?? 0) / 60)}:${String((item?.duration ?? 0) % 60).padStart(2, "0")})`,
-            callback_data: `track_${item?.id}`,
-          },
-        ]);
-      },
+      buildTrackButtons,
       searchTracks,
       myVersion,
       isStale,
@@ -356,10 +361,7 @@ async function handleNewFieldValue(ctx: Context, session: SessionData, env: Env)
     }
   }
 
-  try {
-    await editSongPage(env, lastData, getDisplayLyrics(session) ?? "");
-  } catch (error) {
-    console.warn("Failed to update Telegraph page for field", field, error);
+  if (!(await tryEditSongPage(env, lastData, getDisplayLyrics(session) ?? "", `field ${field}`))) {
     await transition(session, SessionMode.IDLE, ctx.api, ctx.chat?.id);
     resetFlow(session.edit);
     try { await ctx.reply("❌ Failed to update Telegraph page"); } catch {}
@@ -416,7 +418,7 @@ async function handleSendToChannelCallback(ctx: Context, session: SessionData) {
       return;
     }
   } catch (error) {
-    console.warn("Failed to verify admin status for channel", channelId, error);
+    warn("Failed to verify admin status for channel", channelId, error);
     await safeAnswer(ctx, "❌ Can't access this channel.");
     return;
   }
@@ -429,7 +431,7 @@ async function handleSendToChannelCallback(ctx: Context, session: SessionData) {
       reply_markup: button,
     });
   } catch (error) {
-    console.warn("Failed to send audio to channel", channelId, error);
+    warn("Failed to send audio to channel", channelId, error);
     await ctx.editMessageText("❌ Failed to send to channel.");
     return;
   }
@@ -501,7 +503,7 @@ async function handleTrackSelectionCallback(ctx: Context, session: SessionData, 
       lyrics,
     });
   } catch (error) {
-    console.warn("Failed to create Telegraph page for track", trackName, error);
+    warn("Failed to create Telegraph page for track", trackName, error);
     await ctx.editMessageText("❌ Failed to create Telegraph page. Try again later.");
     return;
   }
@@ -561,7 +563,7 @@ async function handleTrackSelectionCallback(ctx: Context, session: SessionData, 
       reply_markup: { inline_keyboard: buildEditMenu() },
     });
   } catch (error) {
-    console.warn("Failed to edit message with final result", error);
+    warn("Failed to edit message with final result", error);
   }
 }
 
@@ -663,10 +665,7 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
       }
       return;
     }
-    try {
-      await editSongPage(env, lastData, session.telegraph.originalLyrics);
-    } catch (error) {
-      console.warn("Failed to update Telegraph for original lyrics", error);
+    if (!(await tryEditSongPage(env, lastData, session.telegraph.originalLyrics, "original lyrics"))) {
       const msgId = session.telegraph.translateMessageId;
       if (msgId && chatId(ctx)) {
         await safeEdit(ctx.api, chatId(ctx)!, msgId, "❌ Failed to update Telegraph page");
@@ -727,10 +726,7 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
       if (combined) {
         const lastData = session.telegraph.data as any;
         if (lastData) {
-          try {
-            await editSongPage(env, lastData, combined);
-          } catch (error) {
-            console.warn("Failed to update Telegraph for cached translation", error);
+          if (!(await tryEditSongPage(env, lastData, combined, "cached translation"))) {
             await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Failed to update Telegraph page");
             return;
           }
@@ -770,6 +766,32 @@ async function showRateLimitCooldown(
   }
 }
 
+type TranslateAttempt =
+  | { kind: "rate_limited"; cooldownUntil: number }
+  | { kind: "text"; text: string }
+  | { kind: "fail" };
+
+// One translateLyrics call, normalized. Swallows unexpected throws (returns
+// "fail") so the caller's control flow stays flat across initial + retry.
+async function runTranslateAttempt(
+  env: Env,
+  lyrics: string,
+  langCode: string,
+): Promise<TranslateAttempt> {
+  try {
+    const result = await translateLyrics(env, lyrics, langCode as LanguageCode);
+    if (result.type === "rate_limited") {
+      return { kind: "rate_limited", cooldownUntil: Date.now() + result.retryAfterSeconds * 1000 };
+    }
+    if (result.type === "success") {
+      return { kind: "text", text: result.text };
+    }
+  } catch (error) {
+    warn("translateLyrics threw unexpectedly", error);
+  }
+  return { kind: "fail" };
+}
+
 async function executeTranslation(
   ctx: Context,
   session: SessionData,
@@ -801,24 +823,14 @@ async function executeTranslation(
 
   await safeEdit(ctx.api, cid!, pickerMsgId!, "🌐 Translating lyrics...\nPlease wait (~10–20s)");
 
-  let rawResult: string | null = null;
-  try {
-    const result = await translateLyrics(env, snapshotOriginal, langCode as LanguageCode);
-
-    if (result.type === "rate_limited") {
-      session.telegraph.isTranslating = false;
-      const cooldownUntil = Date.now() + result.retryAfterSeconds * 1000;
-      session.telegraph.translationCooldownUntil = cooldownUntil;
-      await showRateLimitCooldown(ctx, cid, pickerMsgId, cooldownUntil);
-      return;
-    }
-
-    if (result.type === "success") {
-      rawResult = result.text;
-    }
-  } catch (error) {
-    console.warn("translateLyrics threw unexpectedly", error);
+  const attempt = await runTranslateAttempt(env, snapshotOriginal, langCode);
+  if (attempt.kind === "rate_limited") {
+    session.telegraph.isTranslating = false;
+    session.telegraph.translationCooldownUntil = attempt.cooldownUntil;
+    await showRateLimitCooldown(ctx, cid, pickerMsgId, attempt.cooldownUntil);
+    return;
   }
+  const rawResult: string | null = attempt.kind === "text" ? attempt.text : null;
 
   if (session.telegraph.translationRequestId !== requestId) {
     resetTranslationState(session);
@@ -847,40 +859,33 @@ async function executeTranslation(
 
   let combined = combineLyricsWithTranslation(snapshotOriginal, rawResult);
   if (!combined) {
-    console.warn("combineLyricsWithTranslation failed, retrying translation", {
+    warn("combineLyricsWithTranslation failed, retrying translation", {
       provider: env.TRANSLATION_PROVIDER ?? "gemini",
       lang: langCode,
     });
 
     await safeEdit(ctx.api, cid!, pickerMsgId!, "🔄 Retrying translation...");
 
-    try {
-      const retryResult = await translateLyrics(env, snapshotOriginal, langCode as LanguageCode);
+    const retry = await runTranslateAttempt(env, snapshotOriginal, langCode);
+    if (retry.kind === "rate_limited") {
+      session.telegraph.isTranslating = false;
+      session.telegraph.translationCooldownUntil = retry.cooldownUntil;
+      await showRateLimitCooldown(ctx, cid, pickerMsgId, retry.cooldownUntil);
+      return;
+    }
 
-      if (retryResult.type === "rate_limited") {
-        session.telegraph.isTranslating = false;
-        const cooldownUntil = Date.now() + retryResult.retryAfterSeconds * 1000;
-        session.telegraph.translationCooldownUntil = cooldownUntil;
-        await showRateLimitCooldown(ctx, cid, pickerMsgId, cooldownUntil);
-        return;
+    if (retry.kind === "text") {
+      const retryCombined = combineLyricsWithTranslation(snapshotOriginal, retry.text);
+      if (retryCombined) {
+        session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: retry.text };
+        combined = retryCombined;
       }
-
-      if (retryResult.type === "success") {
-        const retryCombined = combineLyricsWithTranslation(snapshotOriginal, retryResult.text);
-        if (retryCombined) {
-          rawResult = retryResult.text;
-          session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: retryResult.text };
-          combined = retryCombined;
-        }
-      }
-    } catch (error) {
-      console.warn("translation retry threw unexpectedly", error);
     }
 
     if (!combined) {
       delete session.telegraph.translatedLyrics[cacheKey];
       resetTranslationState(session);
-      console.warn("translation retry also failed to produce matching line count");
+      warn("translation retry also failed to produce matching line count");
       await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Translation format error — try again");
       return;
     }
@@ -888,10 +893,7 @@ async function executeTranslation(
 
   const lastData = session.telegraph.data as any;
   if (lastData) {
-    try {
-      await editSongPage(env, lastData, combined);
-    } catch (error) {
-      console.warn("Failed to update Telegraph after translation", error);
+    if (!(await tryEditSongPage(env, lastData, combined, "after translation"))) {
       resetTranslationState(session);
       await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Failed to update Telegraph page");
       return;

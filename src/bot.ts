@@ -12,9 +12,16 @@ import { SessionMode } from "./session/types";
 import { inMode } from "./session/transitions";
 import { safeDelete, cancelEdit } from "./utils/telegram";
 import { clearAudioState } from "./session/flows";
+import { warn } from "./utils/logger";
 
 export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
   const bot = new Bot<Context>(env.BOT_TOKEN);
+
+  // Global error boundary: prevents a single failing handler from rejecting
+  // handleUpdate (which would surface as a 500 and trigger Telegram retries).
+  bot.catch((err) => {
+    warn("Unhandled error in update handler", err.error);
+  });
 
   bot.command("start", async (ctx) => {
     const session = getSession(sessionDo.sessionData);
@@ -63,6 +70,18 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     const mode = session.mode;
     const version = session.version;
     await ctx.reply(`Session mode: ${mode}\nVersion: ${version}`);
+  });
+
+  bot.command("debug", async (ctx) => {
+    if (env.BOT_OWNER_ID && String(ctx.from?.id) !== env.BOT_OWNER_ID) {
+      return;
+    }
+    const arg = (typeof ctx.match === "string" ? ctx.match : "").trim().toLowerCase();
+    const enabled = arg === "on" || arg === "off"
+      ? arg === "on"
+      : !sessionDo.debugEnabled;
+    await sessionDo.setDebugEnabled(enabled);
+    await ctx.reply(`Debug logging ${enabled ? "enabled" : "disabled"}.`);
   });
 
   bot.on("message:text", async (ctx) => {

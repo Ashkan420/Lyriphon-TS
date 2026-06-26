@@ -1,4 +1,5 @@
 import { Env } from "../../env";
+import { debug, warn } from "../../utils/logger";
 
 const MODELS = [
   "gemini-3.1-flash-lite",
@@ -31,7 +32,7 @@ export async function geminiTranslate(
   userPrompt: string,
 ): Promise<GeminiResult> {
   if (!env.GEMINI_API_KEY) {
-    console.warn("geminiTranslate: GEMINI_API_KEY not configured");
+    warn("geminiTranslate: GEMINI_API_KEY not configured");
     return { type: "error" };
   }
 
@@ -44,7 +45,7 @@ export async function geminiTranslate(
       const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
       try {
-        console.log("geminiTranslate:start", {
+        debug("geminiTranslate:start", {
           model,
           attempt: attempt + 1,
           inputLength: userPrompt?.length,
@@ -60,7 +61,7 @@ export async function geminiTranslate(
           signal: controller.signal,
         });
 
-        console.log("geminiTranslate:fetch_done", {
+        debug("geminiTranslate:fetch_done", {
           model,
           attempt: attempt + 1,
           durationMs: Date.now() - startTime,
@@ -70,7 +71,7 @@ export async function geminiTranslate(
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.warn("geminiTranslate:http_error", {
+          warn("geminiTranslate:http_error", {
             model,
             attempt: attempt + 1,
             status: response.status,
@@ -81,13 +82,13 @@ export async function geminiTranslate(
 
           if (response.status === 429) {
             const retryAfterSeconds = parseRetryAfter(errorText);
-            console.log("geminiTranslate:rate_limited", { model, retryAfterSeconds });
+            warn("geminiTranslate:rate_limited", { model, retryAfterSeconds });
             return { type: "rate_limited", retryAfterSeconds };
           }
 
           if (isRetryable(response.status) && attempt < MAX_ATTEMPTS - 1) {
             const delay = Math.pow(2, attempt) * 500 + Math.random() * 300;
-            console.log("geminiTranslate:retrying", {
+            debug("geminiTranslate:retrying", {
               model,
               attempt: attempt + 1,
               delayMs: Math.round(delay),
@@ -100,7 +101,7 @@ export async function geminiTranslate(
 
         const data = await response.json() as any;
 
-        console.log("geminiTranslate:raw_response", {
+        debug("geminiTranslate:raw_response", {
           model,
           attempt: attempt + 1,
           durationMs: Date.now() - startTime,
@@ -110,7 +111,7 @@ export async function geminiTranslate(
 
         const candidate = data?.candidates?.[0];
 
-        console.log("geminiTranslate:candidate_debug", {
+        debug("geminiTranslate:candidate_debug", {
           model,
           attempt: attempt + 1,
           hasCandidates: !!data?.candidates,
@@ -121,7 +122,7 @@ export async function geminiTranslate(
         });
 
         if (!data?.candidates) {
-          console.warn("geminiTranslate:NO_CANDIDATES", {
+          warn("geminiTranslate:NO_CANDIDATES", {
             model,
             attempt: attempt + 1,
             durationMs: Date.now() - startTime,
@@ -133,7 +134,7 @@ export async function geminiTranslate(
         const text = candidate?.content?.parts?.[0]?.text;
 
         if (!text) {
-          console.warn("geminiTranslate:EMPTY_TEXT", {
+          warn("geminiTranslate:EMPTY_TEXT", {
             model,
             attempt: attempt + 1,
             durationMs: Date.now() - startTime,
@@ -142,7 +143,7 @@ export async function geminiTranslate(
           break;
         }
 
-        console.log("geminiTranslate:success", {
+        debug("geminiTranslate:success", {
           model,
           attempt: attempt + 1,
           durationMs: Date.now() - startTime,
@@ -150,7 +151,7 @@ export async function geminiTranslate(
         });
         return { type: "success", text };
       } catch (error: any) {
-        console.warn("geminiTranslate:catch", {
+        warn("geminiTranslate:catch", {
           model,
           attempt: attempt + 1,
           error: error?.name ?? String(error),
@@ -159,7 +160,7 @@ export async function geminiTranslate(
 
         if (error?.name === "AbortError" && attempt < MAX_ATTEMPTS - 1) {
           const delay = Math.pow(2, attempt) * 500 + Math.random() * 300;
-          console.log("geminiTranslate:retrying", {
+          debug("geminiTranslate:retrying", {
             model,
             attempt: attempt + 1,
             delayMs: Math.round(delay),
@@ -174,6 +175,6 @@ export async function geminiTranslate(
     }
   }
 
-  console.warn("geminiTranslate:all_models_exhausted");
+  warn("geminiTranslate:all_models_exhausted");
   return { type: "error" };
 }

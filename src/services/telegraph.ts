@@ -53,10 +53,6 @@ export async function createSongTelegraph(env: Env, options: {
     lyrics,
   });
 
-  //console.log("=== TELEGRAPH OUTPUT ===");
-  //console.log(JSON.stringify(content, null, 2));
-  //console.log("========================");
-
   const response = await fetch("https://api.telegra.ph/createPage", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
