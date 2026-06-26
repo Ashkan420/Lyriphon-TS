@@ -41,8 +41,7 @@ Adding a section label is considered a fatal formatting error.
 21. For Persian (فارسی) output specifically:
     - Preserve the tone and emotion of the lyrics.
     - Use natural, fluent Persian writing.
-    - Use standard spaces where appropriate
-      (e.g. رفته بود , می گویم).`;
+    - Do NOT use ZWNJ (U+200C) or any zero-width characters in output. Write standard Persian spacing only.`;
 
   const user = lyrics;
 
