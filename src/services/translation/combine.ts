@@ -1,3 +1,5 @@
+import { debug, warn } from "../../utils/logger";
+
 const SECTION_LABEL_RE = /^\[.+\]$/;
 
 function isSectionLabel(line: string): boolean {
@@ -30,9 +32,11 @@ export function combineLyricsWithTranslation(
   }
 
   if (originalLines.length !== translatedLines.length) {
-    console.warn("combineLyrics: line count mismatch", {
+    warn("combineLyrics: line count mismatch", {
       originalCount: originalLines.length,
       translatedCount: translatedLines.length,
+    });
+    debug("combineLyrics: line count mismatch detail", {
       originalLines: originalLines.map((l, i) => `${i}: ${l}`),
       translatedLines: translatedLines.map((l, i) => `${i}: ${l}`),
     });
@@ -45,7 +49,7 @@ export function combineLyricsWithTranslation(
 
     if (isSectionLabel(orig)) {
       if (trans.trim() !== orig.trim()) {
-        console.warn("combineLyrics: section label mismatch", {
+        warn("combineLyrics: section label mismatch", {
           line: i,
           original: orig.trim(),
           translated: trans.trim(),
@@ -55,7 +59,7 @@ export function combineLyricsWithTranslation(
     }
 
     if (orig.trim() === "" && trans.trim() !== "") {
-      console.warn("combineLyrics: blank line position mismatch", { line: i });
+      warn("combineLyrics: blank line position mismatch", { line: i });
       return null;
     }
   }

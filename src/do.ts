@@ -3,8 +3,10 @@ import { Env } from "./env";
 import { createSessionData } from "./session/flows";
 import { SessionData } from "./session/types";
 import { createBot } from "./bot";
+import { log, warn, setDebug } from "./utils/logger";
 
 const STORAGE_KEY = "session";
+const DEBUG_KEY = "debug";
 
 export class SessionDO {
   state: DurableObjectState;
@@ -12,6 +14,7 @@ export class SessionDO {
   sessionData: SessionData;
   bot: Bot<Context>;
   deleteQueue: Array<{ chatId: number; messageId: number; deleteAt: number }> = [];
+  debugEnabled = false;
   private initPromise: Promise<void> | null = null;
 
   constructor(state: DurableObjectState, env: Env) {
@@ -19,19 +22,19 @@ export class SessionDO {
     this.env = env;
     this.sessionData = createSessionData();
     this.bot = createBot(env, this);
-    console.log("DO created, bot constructed");
+    log("DO created, bot constructed");
   }
 
   async ensureBotInit() {
     if (!this.bot) throw new Error("Bot not constructed");
     if (!this.initPromise) {
       this.initPromise = this.bot.init().catch((err) => {
-        console.error("grammY init failed:", err);
+        warn("grammY init failed:", err);
         this.initPromise = null;
       });
     }
     await this.initPromise;
-    console.log("grammY init completed (safe to handle updates)");
+    log("grammY init completed (safe to handle updates)");
   }
 
   async fetch(request: Request) {
@@ -44,19 +47,23 @@ export class SessionDO {
       return new Response(null, { status: 400 });
     }
 
-    console.log("Update received");
+    log("Update received");
     try {
       await this.state.blockConcurrencyWhile(async () => {
         await this.loadSession();
+        setDebug(this.debugEnabled);
         await this.ensureBotInit();
         await this.bot.handleUpdate(update as any);
         await this.persistSession();
       });
     } catch (error: any) {
+      // Never re-throw: a 500 makes Telegram retry the same update in a loop.
+      // bot.catch already swallows handler errors, so reaching here is rare
+      // (e.g. a concurrency timeout); log and let the session persist next time.
       if (error?.message?.includes("blockConcurrencyWhile")) {
-        console.warn("DO concurrency timeout — session will persist on next request");
+        warn("DO concurrency timeout — session will persist on next request");
       } else {
-        throw error;
+        warn("Unhandled error while processing update", error);
       }
     }
 
@@ -73,7 +80,7 @@ export class SessionDO {
       try {
         await this.bot.api.deleteMessage(item.chatId, item.messageId);
       } catch (error) {
-        console.warn("Alarm delete failed", error);
+        warn("Alarm delete failed", error);
       }
     }
 
@@ -85,11 +92,19 @@ export class SessionDO {
     this.sessionData = stored ?? createSessionData();
     const queue = await this.state.storage.get<Array<{ chatId: number; messageId: number; deleteAt: number }>>("deleteQueue");
     this.deleteQueue = queue ?? [];
+    this.debugEnabled = (await this.state.storage.get<boolean>(DEBUG_KEY)) ?? false;
   }
 
   async persistSession() {
     await this.state.storage.put(STORAGE_KEY, this.sessionData);
     await this.state.storage.put("deleteQueue", this.deleteQueue);
+    await this.state.storage.put(DEBUG_KEY, this.debugEnabled);
+  }
+
+  async setDebugEnabled(enabled: boolean) {
+    this.debugEnabled = enabled;
+    setDebug(enabled);
+    await this.state.storage.put(DEBUG_KEY, enabled);
   }
 
   scheduleDelete(chatId: number, messageId: number, delayMs: number) {

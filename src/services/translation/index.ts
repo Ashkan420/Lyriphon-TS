@@ -2,6 +2,7 @@ import { Env } from "../../env";
 import { geminiTranslate, GeminiResult } from "./gemini";
 import { buildTranslationPrompt } from "./prompt";
 import { findLanguage, LanguageCode } from "./types";
+import { warn } from "../../utils/logger";
 
 export type { GeminiResult };
 
@@ -15,13 +16,13 @@ export async function translateLyrics(
   }
 
   if (!env.GEMINI_API_KEY) {
-    console.warn("translateLyrics: GEMINI_API_KEY not configured");
+    warn("translateLyrics: GEMINI_API_KEY not configured");
     return { type: "error" };
   }
 
   const language = findLanguage(targetLangCode);
   if (!language) {
-    console.warn("translateLyrics: unsupported language", targetLangCode);
+    warn("translateLyrics: unsupported language", targetLangCode);
     return { type: "error" };
   }
 
@@ -33,6 +34,6 @@ export async function translateLyrics(
     return await geminiTranslate(env, prompt.system, prompt.user);
   }
 
-  console.warn("translateLyrics: unknown provider", provider);
+  warn("translateLyrics: unknown provider", provider);
   return { type: "error" };
 }

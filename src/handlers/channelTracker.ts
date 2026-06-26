@@ -1,6 +1,7 @@
 import { Context } from "grammy";
 import { D1Database } from "@cloudflare/workers-types";
 import { addChannel, getUsersByChannel, removeChannel } from "../db/channels";
+import { warn } from "../utils/logger";
 
 export async function trackChannels(ctx: Context, db: D1Database) {
   const chat = ctx.chat;
@@ -21,8 +22,7 @@ export async function trackChannels(ctx: Context, db: D1Database) {
     try {
       await addChannel(db, actorId, chatId, chat.title);
     } catch (error) {
-      console.warn("Failed to add channel", chatId, actorId, error);
-    }
+      warn("Failed to add channel", chatId, actorId, error);    }
   } else if (status === "left" || status === "kicked") {
     try {
       const userIds = await getUsersByChannel(db, chatId);
@@ -30,7 +30,7 @@ export async function trackChannels(ctx: Context, db: D1Database) {
         await removeChannel(db, userId, chatId);
       }
     } catch (error) {
-      console.warn("Failed to remove channel", chatId, error);
+      warn("Failed to remove channel", chatId, error);
     }
   }
 }

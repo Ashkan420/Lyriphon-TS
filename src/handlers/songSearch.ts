@@ -4,7 +4,7 @@ import { searchTracks } from "../services/deezer";
 import { SessionData, SessionMode } from "../session/types";
 import { clearAudioState } from "../session/flows";
 import { inMode } from "../session/transitions";
-import { searchAndShowResults, safeDelete, safeAnswer } from "../utils/telegram";
+import { searchAndShowResults, safeAnswer, formatDuration, clearSendChannelPrompt } from "../utils/telegram";
 
 const PAGE_SIZE = 5;
 
@@ -18,7 +18,7 @@ export function buildTrackButtons(results: any[], page = 0) {
     const artistName = item?.artist?.name ?? "Unknown";
     const duration = item?.duration ?? 0;
     const trackId = item?.id;
-    const durText = `${Math.floor(duration / 60)}:${String(duration % 60).padStart(2, "0")}`;
+    const durText = formatDuration(duration);
 
     buttons.push([
       {
@@ -50,10 +50,7 @@ export async function songSearchCommand(ctx: Context, session: SessionData) {
 
   clearAudioState(session);
 
-  if (session.audio.sendChannelPromptId) {
-    await safeDelete(ctx.api, chatId, session.audio.sendChannelPromptId);
-    session.audio.sendChannelPromptId = undefined;
-  }
+  await clearSendChannelPrompt(ctx.api, chatId, session);
 
   const query = (typeof ctx.match === 'string' ? ctx.match : ctx.match?.[0]) ?? ctx.message?.text?.split(" ").slice(1).join(" ");
   if (!query) {

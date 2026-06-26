@@ -3,7 +3,7 @@ import { searchTracks } from "../services/deezer";
 import { SessionData, SessionMode } from "../session/types";
 import { clearAudioState } from "../session/flows";
 import { inMode, transition } from "../session/transitions";
-import { searchAndShowResults, safeDelete } from "../utils/telegram";
+import { searchAndShowResults, clearSendChannelPrompt } from "../utils/telegram";
 import { buildTrackButtons } from "./songSearch";
 
 export async function handleMusicFile(ctx: Context, session: SessionData) {
@@ -18,10 +18,7 @@ export async function handleMusicFile(ctx: Context, session: SessionData) {
     return;
   }
 
-  if (session.audio.sendChannelPromptId) {
-    await safeDelete(ctx.api, chatId, session.audio.sendChannelPromptId);
-    session.audio.sendChannelPromptId = undefined;
-  }
+  await clearSendChannelPrompt(ctx.api, chatId, session);
 
   const titleCandidate = message.audio?.title;
   const artistCandidate = message.audio?.performer;

@@ -6,6 +6,7 @@ import { SessionData, SessionMode } from "../session/types";
 import { transition } from "../session/transitions";
 import { resetFlow } from "../session/flows";
 import { escapeMd as escapeMdUtil } from "./escapeMd";
+import { warn } from "./logger";
 import type { InlineKeyboardMarkup } from "@grammyjs/types";
 
 export function formatDuration(seconds: number): string {
@@ -46,6 +47,26 @@ export async function safeEdit(
   } catch {}
 }
 
+// Edit the message that triggered the current update (ctx-based), ignoring
+// failures. Replaces the many bare `try { await ctx.editMessageText(t) } catch {}`.
+export async function safeEditMessage(ctx: Context, text: string): Promise<void> {
+  try {
+    await ctx.editMessageText(text);
+  } catch {}
+}
+
+// Delete the lingering "Send to which channel?" prompt, if any.
+export async function clearSendChannelPrompt(
+  api: Api<RawApi>,
+  chatId: number,
+  session: SessionData,
+): Promise<void> {
+  if (session.audio.sendChannelPromptId) {
+    await safeDelete(api, chatId, session.audio.sendChannelPromptId);
+    session.audio.sendChannelPromptId = undefined;
+  }
+}
+
 export async function delayedDelete(
   bot: Api<RawApi>,
   chatId: number,
@@ -60,8 +81,7 @@ export async function delayedDelete(
 
   // In Cloudflare Workers, setTimeout is not available.
   // scheduleDelete (DO alarm queue) must be provided.
-  console.warn("delayedDelete called without scheduleDelete — message will not be deleted");
-}
+  warn("delayedDelete called without scheduleDelete — message will not be deleted");}
 
 export async function searchAndShowResults(
   bot: Api<RawApi>,
@@ -149,7 +169,7 @@ export async function attachAudioAndPromptChannel(
       session.audio.sendChannelPromptId = prompt.message_id;
     }
   } catch (error) {
-    console.warn("Failed to fetch user channels (table may not exist)", error);
+    warn("Failed to fetch user channels (table may not exist)", error);
   }
 
   return caption;
