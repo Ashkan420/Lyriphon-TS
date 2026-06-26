@@ -34,7 +34,7 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
 
   bot.command("song", async (ctx) => {
     const session = getSession(sessionDo.sessionData);
-    await songSearchCommand(ctx, session);
+    await songSearchCommand(ctx, session, env);
   });
 
   bot.command("done", async (ctx) => {
@@ -100,7 +100,7 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
   });
 
   bot.on("inline_query", async (ctx) => {
-    await inlineSearch(ctx);
+    await inlineSearch(ctx, env);
   });
 
   bot.on("my_chat_member", async (ctx) => {

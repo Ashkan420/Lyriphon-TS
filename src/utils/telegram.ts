@@ -93,11 +93,21 @@ export async function searchAndShowResults(
   searchTracks: (query: string, limit?: number) => Promise<any[] | null>,
   version?: number,
   isStale?: (session: SessionData, capturedVersion: number) => boolean,
+  fallbackQuery?: string,
 ) {
-  const results = await searchTracks(searchQuery);
+  let results = await searchTracks(searchQuery);
   if (!results) {
     await bot.sendMessage(chatId, "❌ Search failed. Try again later.");
     return false;
+  }
+
+  // When the primary query (e.g. a Finglish transliteration) yields nothing,
+  // retry once with the fallback (e.g. the original Farsi title).
+  if (!results.length && fallbackQuery && fallbackQuery !== searchQuery) {
+    const fallbackResults = await searchTracks(fallbackQuery);
+    if (fallbackResults?.length) {
+      results = fallbackResults;
+    }
   }
 
   if (version !== undefined && isStale && isStale(session, version)) {

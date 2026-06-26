@@ -1,9 +1,11 @@
 import { Context } from "grammy";
 import type { InlineQueryResultArticle, InputTextMessageContent } from "@grammyjs/types";
 import { searchTracks } from "../services/deezer";
+import { Env } from "../env";
+import { containsFarsi, transliterateFarsi } from "../services/translation/finglish";
 import { formatDuration } from "../utils/telegram";
 
-export async function inlineSearch(ctx: Context) {
+export async function inlineSearch(ctx: Context, env: Env) {
   const queryText = ctx.inlineQuery?.query?.trim();
   if (!queryText) {
     await ctx.answerInlineQuery([], {
@@ -14,7 +16,20 @@ export async function inlineSearch(ctx: Context) {
     return;
   }
 
-  const results = await searchTracks(queryText, 5);
+  // Farsi titles don't match Deezer's Latin-script index. Search the Finglish
+  // transliteration first, falling back to the original on no results.
+  let results = await searchTracks(
+    containsFarsi(queryText)
+      ? (await transliterateFarsi(env, queryText)) ?? queryText
+      : queryText,
+    5,
+  );
+  if (results && !results.length && containsFarsi(queryText)) {
+    const fallback = await searchTracks(queryText, 5);
+    if (fallback?.length) {
+      results = fallback;
+    }
+  }
   if (!results) {
     await ctx.answerInlineQuery([], { cache_time: 60, is_personal: true });
     return;
