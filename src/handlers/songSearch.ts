@@ -1,6 +1,8 @@
 import { Context } from "grammy";
 import type { InlineKeyboardButton } from "@grammyjs/types";
 import { searchTracks } from "../services/deezer";
+import { Env } from "../env";
+import { containsFarsi, transliterateFarsi } from "../services/translation/finglish";
 import { SessionData, SessionMode } from "../session/types";
 import { clearAudioState } from "../session/flows";
 import { inMode } from "../session/transitions";
@@ -42,7 +44,7 @@ export function buildTrackButtons(results: any[], page = 0) {
   return buttons;
 }
 
-export async function songSearchCommand(ctx: Context, session: SessionData) {
+export async function songSearchCommand(ctx: Context, session: SessionData, env: Env) {
   const chatId = ctx.chat?.id;
   if (!chatId) {
     return;
@@ -58,14 +60,31 @@ export async function songSearchCommand(ctx: Context, session: SessionData) {
     return;
   }
 
+  // Farsi titles don't match Deezer's Latin-script index. Transliterate to
+  // Finglish and search with that, falling back to the original on no results.
+  let searchQuery = query;
+  let displayLabel = query;
+  let fallbackQuery: string | undefined;
+  if (containsFarsi(query)) {
+    const finglish = await transliterateFarsi(env, query);
+    if (finglish) {
+      searchQuery = finglish;
+      displayLabel = `${query} → ${finglish}`;
+      fallbackQuery = query;
+    }
+  }
+
   await searchAndShowResults(
     ctx.api,
     chatId,
     session,
-    query,
-    query,
+    searchQuery,
+    displayLabel,
     buildTrackButtons,
     searchTracks,
+    undefined,
+    undefined,
+    fallbackQuery,
   );
 }
 
