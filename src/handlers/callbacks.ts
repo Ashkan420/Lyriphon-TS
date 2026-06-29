@@ -778,9 +778,10 @@ async function runTranslateAttempt(
   lyrics: string,
   langCode: string,
   langAnalysis?: import("../services/translation/language-analyzer").LanguageAnalysis,
+  multilingualEnabled = true,
 ): Promise<TranslateAttempt> {
   try {
-    const result = await translateLyrics(env, lyrics, langCode as LanguageCode, langAnalysis);
+    const result = await translateLyrics(env, lyrics, langCode as LanguageCode, langAnalysis, multilingualEnabled);
     if (result.type === "rate_limited") {
       return { kind: "rate_limited", cooldownUntil: Date.now() + result.retryAfterSeconds * 1000 };
     }
@@ -824,10 +825,11 @@ async function executeTranslation(
 
   // Read detected source language for prompt composition
   const langAnalysis = session.telegraph.languageAnalysis;
+  const multilingualEnabled = session.telegraph.multilingualEnabled ?? true;
 
   await safeEdit(ctx.api, cid!, pickerMsgId!, "🌐 Translating lyrics...\nPlease wait (~10–20s)");
 
-  const attempt = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis);
+  const attempt = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis, multilingualEnabled);
   if (attempt.kind === "rate_limited") {
     session.telegraph.isTranslating = false;
     session.telegraph.translationCooldownUntil = attempt.cooldownUntil;
@@ -870,7 +872,7 @@ async function executeTranslation(
 
     await safeEdit(ctx.api, cid!, pickerMsgId!, "🔄 Retrying translation...");
 
-    const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis);
+    const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis, multilingualEnabled);
     if (retry.kind === "rate_limited") {
       session.telegraph.isTranslating = false;
       session.telegraph.translationCooldownUntil = retry.cooldownUntil;

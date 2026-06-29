@@ -1,36 +1,25 @@
 // Source-language rules for German lyrics. German compounds, verb-final word
 // order, and modal particles read awkwardly when translated literally.
 
-export const GERMAN_SOURCE = `SOURCE LANGUAGE — GERMAN:
+export const GERMAN_SOURCE = `SOURCE LANGUAGE — GERMAN
 
-CORE TRANSLATION RULES:
-- Translate meaning, not grammar. Do NOT preserve German word order or sentence structure; rebuild each line so it reads naturally in the target language.
-- Treat each line as a complete semantic unit before reconstructing it naturally.
+MEANING RULES:
+- Translate meaning, not grammar. Do NOT preserve German word order; reconstruct each line naturally in the target language.
+- Treat each line as a complete semantic unit before translation.
 
-COMPOUND NOUNS & ABSTRACT TERMS:
-- Unpack compound nouns (e.g. Fernweh, Sehnsucht, Weltschmerz) into the natural phrase, image, or concept the target language would use.
-- Do NOT invent literal compound translations if they sound unnatural.
+INTERPRETATION RULES:
+- Compound nouns (e.g. Sehnsucht, Fernweh, Weltschmerz) should be rendered as natural concepts or expressions in the target language, not literal word splits.
+- Idioms and figurative language must be translated by intended meaning, not literal wording.
+- Modal particles (doch, ja, mal, halt, eben, schon, etc.) express tone or attitude; reflect them through phrasing or omit if no natural equivalent exists.
 
-WORD ORDER & CLAUSE STRUCTURE:
-- German frequently places verbs at the end of subordinate clauses and separates prefixes from verbs.
-- Reconstruct sentences using the target language's natural syntax rather than preserving German structure.
+STRUCTURE & SYNTAX:
+- German word order (e.g. verb-final clauses, separable verbs) must NOT be preserved. Always rebuild using target-language syntax.
 
-MODAL PARTICLES & EMPHASIS:
-- Modal particles (doch, ja, mal, halt, eben, schon, wohl, denn, etc.) express attitude, emphasis, or speaker intent rather than literal meaning.
-- Convey their emotional effect through tone when appropriate, or omit them if no natural equivalent exists.
+EMOTIONAL PRIORITY:
+- Preserve emotional weight, nuance, and conciseness rather than literal structure.
+- If a literal translation sounds rigid, rewrite for natural lyric flow while keeping meaning intact.
 
-IDIOMS & FIGURATIVE LANGUAGE:
-- Render idioms, figurative expressions, and culturally specific phrases by their intended meaning rather than their literal wording.
-- Preserve metaphorical imagery when it feels natural in the target language; otherwise adapt it to achieve the same emotional effect.
-
-REGISTER & PRONOUNS:
-- Preserve the relationship between speakers (formal "Sie" vs. informal "du") through tone rather than literal wording when the distinction is not expressed in the target language.
-
-EMOTIONAL & LYRICAL PRIORITY:
-- German lyrics often use concise wording with dense emotional or philosophical meaning. Preserve the emotional weight rather than the literal wording.
-- If a literal translation feels rigid or overly formal, rewrite it into natural, fluent target-language lyrics while preserving meaning.
-
-FINAL OUTPUT BEHAVIOR:
-- The output should read as though it was originally written in the target language, not translated.
-- Freely restructure lines whenever doing so improves naturalness without changing the intended meaning.
+OUTPUT BEHAVIOR:
+- Output must read like it was originally written in the target language.
+- Do not add explanations, commentary, or formatting.
 `;

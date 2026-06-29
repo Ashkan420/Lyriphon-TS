@@ -25,10 +25,11 @@ export function composeTranslationPrompt(
   lyrics: string,
   target: SupportedLanguage,
   langAnalysis?: LanguageAnalysis,
+  multilingualEnabled = true,
 ): { system: string; user: string; modules: { base: boolean; source: string; secondary: string[]; target: string } } {
   const targetFragment = TARGET_FRAGMENTS[target.code] ?? "";
-  const sourceFragments = getSourceFragments(langAnalysis);
-  const { source, secondary } = getSourceFragmentNames(langAnalysis);
+  const sourceFragments = getSourceFragments(langAnalysis, multilingualEnabled);
+  const { source, secondary } = getSourceFragmentNames(langAnalysis, multilingualEnabled);
 
   const system = [BASE_PROMPT, ...sourceFragments, targetFragment]
     .filter(Boolean)

@@ -12,6 +12,7 @@ export async function translateLyrics(
   lyrics: string,
   targetLangCode: LanguageCode,
   langAnalysis?: LanguageAnalysis,
+  multilingualEnabled = true,
 ): Promise<GeminiResult> {
   if (!lyrics?.trim()) {
     return { type: "error" };
@@ -28,7 +29,7 @@ export async function translateLyrics(
     return { type: "error" };
   }
 
-  const prompt = composeTranslationPrompt(lyrics, language, langAnalysis);
+  const prompt = composeTranslationPrompt(lyrics, language, langAnalysis, multilingualEnabled);
 
   const provider = env.TRANSLATION_PROVIDER ?? "gemini";
 

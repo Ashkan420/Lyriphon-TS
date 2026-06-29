@@ -206,10 +206,12 @@ export function isSourceLanguage(
   );
 }
 
-export function getSourceFragments(analysis: LanguageAnalysis | undefined): string[] {
+export function getSourceFragments(analysis: LanguageAnalysis | undefined, multilingualEnabled = true): string[] {
   if (!analysis) return [GENERAL_SOURCE];
 
   const primaryFragment = SOURCE_FRAGMENTS[analysis.primary.code] ?? GENERAL_SOURCE;
+
+  if (!multilingualEnabled) return [primaryFragment];
 
   switch (analysis.mode) {
     case "single":
@@ -227,10 +229,12 @@ export function getSourceFragments(analysis: LanguageAnalysis | undefined): stri
   }
 }
 
-export function getSourceFragmentNames(analysis: LanguageAnalysis | undefined): { source: string; secondary: string[] } {
+export function getSourceFragmentNames(analysis: LanguageAnalysis | undefined, multilingualEnabled = true): { source: string; secondary: string[] } {
   if (!analysis) return { source: "general", secondary: ["none"] };
 
   const primaryName = analysis.primary.code;
+
+  if (!multilingualEnabled) return { source: primaryName, secondary: ["none"] };
 
   switch (analysis.mode) {
     case "single":
