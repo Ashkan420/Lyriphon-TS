@@ -1,6 +1,6 @@
 import { francAll } from "franc";
-import { warn } from "../../utils/logger";
-import { FRANC_TO_LANG, FLAG_MAP, getFlag } from "./detect";
+import { debug } from "../../utils/logger";
+import { FRANC_TO_LANG, getFlag } from "./detect";
 import { GENERAL_SOURCE } from "./prompts/sources/general";
 import { JAPANESE_SOURCE } from "./prompts/sources/japanese";
 import { GERMAN_SOURCE } from "./prompts/sources/german";
@@ -35,6 +35,15 @@ const DOMINANCE_THRESHOLD = 0.35;
 const MIN_SCORE = 0.10;
 const MEANINGFUL_SCORE = 0.20;
 const MIN_LENGTH = 50;
+const SCRIPT_MIN_RATIO = 0.15;
+
+const SCRIPT_PATTERNS: Array<{ regex: RegExp; code: string }> = [
+  { regex: /[\u3040-\u309F\u30A0-\u30FF]/, code: "jpn" },
+  { regex: /[\uAC00-\uD7AF]/, code: "kor" },
+  { regex: /[\u0600-\u06FF]/, code: "fas" },
+  { regex: /[\u0900-\u097F]/, code: "hin" },
+  { regex: /[\u0400-\u04FF]/, code: "rus" },
+];
 
 const SOURCE_FRAGMENTS: Record<string, string> = {
   jpn: JAPANESE_SOURCE,
@@ -56,14 +65,51 @@ const SOURCE_HINTS: Record<string, string> = {
   pes: PERSIAN_HINT,
 };
 
-export function analyzeLanguages(lyrics: string): LanguageAnalysis | undefined {
-  const results = francAll(lyrics, { minLength: MIN_LENGTH });
-  const all = results
-    .filter(([, score]) => score >= MIN_SCORE)
-    .map(([code, score]) => ({ code, score }))
-    .sort((a, b) => b.score - a.score);
+const SUPPORTED_FRANC_CODES = new Set([
+  ...Object.keys(SOURCE_FRAGMENTS),
+  "eng",
+]);
 
-  if (!all.length) return undefined;
+function detectByScript(lyrics: string): DetectedLanguage | null {
+  const totalChars = lyrics.replace(/\s/g, "").length;
+  if (totalChars === 0) return null;
+
+  for (const { regex, code } of SCRIPT_PATTERNS) {
+    const matches = lyrics.match(new RegExp(regex.source, "g"));
+    if (matches) {
+      const ratio = matches.length / totalChars;
+      if (ratio > SCRIPT_MIN_RATIO) {
+        return { code, score: Math.min(ratio * 2, 0.95) };
+      }
+    }
+  }
+  return null;
+}
+
+export function analyzeLanguages(lyrics: string): LanguageAnalysis | undefined {
+  const scriptResult = detectByScript(lyrics);
+  debug("analyzeLanguages:script", { result: scriptResult });
+
+  const francResults = francAll(lyrics, { minLength: MIN_LENGTH });
+  const supported = francResults
+    .filter(([code, score]) => score >= MIN_SCORE && SUPPORTED_FRANC_CODES.has(code))
+    .map(([code, score]) => ({ code, score }));
+
+  debug("analyzeLanguages:franc_supported", {
+    total: francResults.length,
+    supportedCount: supported.length,
+    supported: supported.slice(0, 10),
+  });
+
+  const all = scriptResult
+    ? [scriptResult, ...supported.filter(r => r.code !== scriptResult.code)]
+        .sort((a, b) => b.score - a.score)
+    : supported;
+
+  if (!all.length) {
+    debug("analyzeLanguages:no_results");
+    return undefined;
+  }
 
   const primary = all[0];
   const meaningful = all.filter(d => d.score >= MEANINGFUL_SCORE);
@@ -78,11 +124,14 @@ export function analyzeLanguages(lyrics: string): LanguageAnalysis | undefined {
     mode = "single";
   }
 
-  for (const d of all) {
-    if (!FRANC_TO_LANG[d.code] && !FLAG_MAP[d.code]) {
-      warn("Unknown franc code detected", { code: d.code, score: d.score });
-    }
-  }
+  debug("analyzeLanguages:result", {
+    mode,
+    primary,
+    secondary,
+    meaningfulCount: meaningful.length,
+    allCount: all.length,
+    all: all.slice(0, 5),
+  });
 
   return { mode, primary, secondary, meaningful, all };
 }
