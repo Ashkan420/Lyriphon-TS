@@ -777,9 +777,10 @@ async function runTranslateAttempt(
   env: Env,
   lyrics: string,
   langCode: string,
+  sourceFrancCode?: string,
 ): Promise<TranslateAttempt> {
   try {
-    const result = await translateLyrics(env, lyrics, langCode as LanguageCode);
+    const result = await translateLyrics(env, lyrics, langCode as LanguageCode, sourceFrancCode);
     if (result.type === "rate_limited") {
       return { kind: "rate_limited", cooldownUntil: Date.now() + result.retryAfterSeconds * 1000 };
     }
@@ -821,9 +822,12 @@ async function executeTranslation(
   session.telegraph.translationRequestId = requestId;
   const snapshotOriginal = originalLyrics;
 
+  // Read detected source language (franc code) for prompt composition
+  const detectedLang = session.telegraph.detectedLang;
+
   await safeEdit(ctx.api, cid!, pickerMsgId!, "🌐 Translating lyrics...\nPlease wait (~10–20s)");
 
-  const attempt = await runTranslateAttempt(env, snapshotOriginal, langCode);
+  const attempt = await runTranslateAttempt(env, snapshotOriginal, langCode, detectedLang);
   if (attempt.kind === "rate_limited") {
     session.telegraph.isTranslating = false;
     session.telegraph.translationCooldownUntil = attempt.cooldownUntil;
@@ -866,7 +870,7 @@ async function executeTranslation(
 
     await safeEdit(ctx.api, cid!, pickerMsgId!, "🔄 Retrying translation...");
 
-    const retry = await runTranslateAttempt(env, snapshotOriginal, langCode);
+    const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, detectedLang);
     if (retry.kind === "rate_limited") {
       session.telegraph.isTranslating = false;
       session.telegraph.translationCooldownUntil = retry.cooldownUntil;
