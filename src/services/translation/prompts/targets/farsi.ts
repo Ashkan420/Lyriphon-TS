@@ -2,8 +2,16 @@
 // is critical: zero-width characters break the line-matching in combine.ts.
 
 export const FARSI_TARGET = `TARGET LANGUAGE — PERSIAN (FARSI):
-- Write natural, fluent Persian that reads well to a native speaker. Preserve the tone and emotion of the original lyrics.
-- Match the register of the original — keep casual lyrics conversational and poetic lyrics lyrical.
-- Do NOT use ZWNJ (U+200C) or any zero-width / invisible characters anywhere in the output. Use standard Persian spacing only (a normal space where a ZWNJ would conventionally go).
-- Use standard, widely understood Persian vocabulary; avoid obscure or overly classical wording unless the original calls for it.
-- Render the meaning idiomatically in Persian rather than translating English/source structure literally.`;
+
+- Write natural, fluent Persian that reads like original lyrics, not a translation.
+- Preserve tone, emotion, and poetic intensity of the original.
+- Do NOT use ZWNJ (U+200C) or any invisible characters. Use normal spacing only (a normal space where a ZWNJ would conventionally go)..
+- Do NOT translate source syntax literally. Avoid copying structures like “X is Y” or word-for-word word order from German, Japanese, or English.
+- Reorder sentences freely to match natural Persian lyric flow, even if it differs from the source structure.
+- Prefer idiomatic Persian expressions over literal equivalents, especially in poetic or emotional lines.
+- In lyrical or poetic contexts, allow omission of the copula (است) when natural, and use more compressed phrasing where appropriate.
+- Match register carefully:
+  - poetic lines → lyrical / elevated Persian
+  - casual lines → conversational Persian
+- Use standard, widely understood Persian vocabulary; avoid overly classical or archaic wording unless clearly intended.
+- Maintain line-by-line structure exactly, but each line should feel naturally written in Persian rather than translated.`;

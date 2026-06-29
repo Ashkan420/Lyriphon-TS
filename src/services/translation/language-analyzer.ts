@@ -92,7 +92,10 @@ export function isSourceLanguage(
   targetLangCode: string,
 ): boolean {
   if (!analysis) return false;
-  return analysis.all.some(d => FRANC_TO_LANG[d.code] === targetLangCode);
+  return (
+    FRANC_TO_LANG[analysis.primary.code] === targetLangCode
+    && analysis.primary.score >= 0.75
+  );
 }
 
 export function getSourceFragments(analysis: LanguageAnalysis | undefined): string[] {

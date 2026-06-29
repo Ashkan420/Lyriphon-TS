@@ -51,6 +51,8 @@ export async function geminiTranslate(
           inputLength: userPrompt?.length,
         });
 
+        debug("geminiTranslate:prompt", { systemPrompt });
+
         const response = await fetch(`${url}?key=${env.GEMINI_API_KEY}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
