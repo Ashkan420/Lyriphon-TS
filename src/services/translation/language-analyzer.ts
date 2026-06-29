@@ -49,9 +49,9 @@ const SCRIPT_PATTERNS: Array<{ regex: RegExp; code: string }> = [
   { regex: /[\u0400-\u04FF]/, code: "ru" },
 ];
 
-const SCRIPT_BOOST = 0.3;
 const DIALECT_CAP = 1.2;
 const MIN_LENGTH = 50;
+const SCRIPT_RATIO_THRESHOLD = 0.12;
 
 const SOURCE_FRAGMENTS: Record<string, string> = {
   ja: JAPANESE_SOURCE,
@@ -71,6 +71,27 @@ const SOURCE_HINTS: Record<string, string> = {
   fa: PERSIAN_HINT,
 };
 
+interface ScriptResult {
+  code: string;
+  ratio: number;
+}
+
+function detectByScript(lyrics: string): ScriptResult | null {
+  const totalChars = lyrics.replace(/\s/g, "").length;
+  if (totalChars === 0) return null;
+
+  for (const { regex, code } of SCRIPT_PATTERNS) {
+    const matches = lyrics.match(new RegExp(regex.source, "g"));
+    if (matches) {
+      const ratio = matches.length / totalChars;
+      if (ratio >= SCRIPT_RATIO_THRESHOLD) {
+        return { code, ratio };
+      }
+    }
+  }
+  return null;
+}
+
 function normalizeFranc(results: readonly (string | number)[][]): Map<string, number> {
   const raw = new Map<string, number>();
   for (const [code, score] of results) {
@@ -86,44 +107,39 @@ function normalizeFranc(results: readonly (string | number)[][]): Map<string, nu
   return capped;
 }
 
-function applyScriptBoost(scores: Map<string, number>, lyrics: string): void {
-  const totalChars = lyrics.replace(/\s/g, "").length;
-  if (totalChars === 0) return;
+function mergeResults(
+  script: ScriptResult | null,
+  francScores: Map<string, number>,
+): DetectedLanguage[] {
+  const FRANC_WEIGHT = script ? 0.4 : 1.0;
 
-  for (const { regex, code } of SCRIPT_PATTERNS) {
-    const matches = lyrics.match(new RegExp(regex.source, "g"));
-    if (matches) {
-      const ratio = matches.length / totalChars;
-      if (ratio > 0.15) {
-        const current = scores.get(code) ?? 0;
-        scores.set(code, current + ratio * SCRIPT_BOOST);
-      }
-    }
+  const entries: DetectedLanguage[] = [];
+  for (const [code, score] of francScores) {
+    entries.push({ code, score: score * FRANC_WEIGHT });
   }
+
+  if (script) {
+    entries.push({ code: script.code, score: 1.0 });
+  }
+
+  return entries.sort((a, b) => b.score - a.score);
 }
 
-function hardFilter(scores: Map<string, number>): DetectedLanguage[] {
-  const MIN_SCORE = 0.15;
+function hardFilter(languages: DetectedLanguage[]): DetectedLanguage[] {
+  const MIN_SCORE = 0.05;
   const MAX_LANGS = 4;
-  return [...scores.entries()]
-    .filter(([, s]) => s >= MIN_SCORE)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, MAX_LANGS)
-    .map(([code, score]) => ({ code, score }));
-}
-
-function normalizeToShares(languages: DetectedLanguage[]): DetectedLanguage[] {
-  const total = languages.reduce((sum, d) => sum + d.score, 0);
-  if (total === 0) return languages;
-  return languages.map(d => ({ ...d, score: d.score / total }));
+  return languages
+    .filter(d => d.score >= MIN_SCORE)
+    .slice(0, MAX_LANGS);
 }
 
 function classify(languages: DetectedLanguage[]): LanguageAnalysis {
   const primary = languages[0];
   const secondary = languages[1];
 
-  const primaryShare = primary.score;
-  const secondaryShare = secondary?.score ?? 0;
+  const total = languages.reduce((sum, d) => sum + d.score, 0);
+  const primaryShare = total > 0 ? primary.score / total : 1;
+  const secondaryShare = secondary && total > 0 ? secondary.score / total : 0;
 
   let mode: LanguageMode;
   if (primaryShare > 0.80) {
@@ -134,33 +150,41 @@ function classify(languages: DetectedLanguage[]): LanguageAnalysis {
     mode = "multilingual";
   }
 
-  const meaningful = languages.filter(d => d.score >= 0.10);
+  const all = languages.map(d => ({
+    ...d,
+    score: total > 0 ? d.score / total : 0,
+  }));
+
+  const meaningful = all.filter(d => d.score >= 0.10);
+
   return {
     mode,
-    primary,
-    secondary: secondaryShare > 0.10 ? secondary : undefined,
+    primary: all[0],
+    secondary: secondaryShare > 0.10 ? all[1] : undefined,
     meaningful,
-    all: languages,
+    all,
   };
 }
 
 export function analyzeLanguages(lyrics: string): LanguageAnalysis | undefined {
-  const francRaw = francAll(lyrics, { minLength: MIN_LENGTH });
-  const scores = normalizeFranc(francRaw);
-  applyScriptBoost(scores, lyrics);
-  const filtered = hardFilter(scores);
+  const script = detectByScript(lyrics);
+  debug("analyzeLanguages:script", { result: script });
 
-  debug("analyzeLanguages:pipeline", {
-    francCount: francRaw.length,
-    afterNormalize: [...scores.entries()].slice(0, 5),
-    filtered,
-  });
+  const francRaw = francAll(lyrics, { minLength: MIN_LENGTH });
+  debug("analyzeLanguages:francRawTop5", francRaw.slice(0, 5));
+
+  const francScores = normalizeFranc(francRaw);
+  debug("analyzeLanguages:francNormalized", [...francScores.entries()].slice(0, 5));
+
+  const merged = mergeResults(script, francScores);
+  debug("analyzeLanguages:merged", merged);
+
+  const filtered = hardFilter(merged);
+  debug("analyzeLanguages:filtered", filtered);
 
   if (!filtered.length) return undefined;
 
-  const shared = normalizeToShares(filtered);
-  const result = classify(shared);
-
+  const result = classify(filtered);
   debug("analyzeLanguages:result", {
     mode: result.mode,
     primary: result.primary,
