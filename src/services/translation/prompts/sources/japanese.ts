@@ -17,10 +17,7 @@ SUBJECT & OBJECT INFERENCE:
 
 NUANCE & SENTENCE ENDINGS:
 - Sentence-final particles (ね, よ, な, ぞ, だろう, でしょう, etc.) and elongated endings encode tone, not meaning.
-- Convert them into natural equivalents in the target language such as:
-  - certainty / insistence
-  - softness / hesitation
-  - emphasis / emotional weight
+- Convert them into natural target-language effects such as certainty, emphasis, softness, hesitation, or emotional weight.
 - NEVER translate particles literally or preserve them as words.
 
 ONOMATOPOEIA & SOUND SYMBOLISM:
@@ -48,6 +45,17 @@ EMOTIONAL PRIORITY:
 - Japanese lyrics often rely on implication and silence; ensure the translation makes implicit meaning explicit when necessary for clarity.
 
 FINAL OUTPUT BEHAVIOR:
-- Output must always be fully grammatical and natural in the target language.
-- Do NOT preserve ambiguity that exists only due to Japanese ellipsis unless ambiguity is intentional and meaningful in the original.
+- The output must read like it was originally written in natural target-language lyrics, not like a translation.
+- If a literal structure feels translated or unnatural, freely restructure the line while preserving meaning.
+`;
+
+export const JAPANESE_HINT = `SOURCE LANGUAGE — JAPANESE:
+- Focus on natural meaning-based translation rather than literal structure.
+- Reconstruct lines into fluent target-language phrasing instead of following Japanese syntax.
+- Infer omitted subjects and objects from context so the translation reads complete and natural.
+- Convert sentence-ending particles into tone (emotion, emphasis, softness) rather than words.
+- Render onomatopoeia and sound symbolism as meaning or imagery, not literal sounds or romanization.
+- Interpret politeness and speech level through tone rather than direct equivalents.
+- Keep recurring phrases consistent where possible.
+- Prioritize emotional intent and lyrical flow over literal accuracy.
 `;
