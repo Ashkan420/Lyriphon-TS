@@ -30,6 +30,7 @@ export async function geminiTranslate(
   env: Env,
   systemPrompt: string,
   userPrompt: string,
+  modules?: { base: boolean; source: string; secondary: string[]; target: string },
 ): Promise<GeminiResult> {
   if (!env.GEMINI_API_KEY) {
     warn("geminiTranslate: GEMINI_API_KEY not configured");
@@ -51,7 +52,7 @@ export async function geminiTranslate(
           inputLength: userPrompt?.length,
         });
 
-        debug("geminiTranslate:prompt", { systemPrompt });
+        debug("geminiTranslate:modules", modules);
 
         const response = await fetch(`${url}?key=${env.GEMINI_API_KEY}`, {
           method: "POST",

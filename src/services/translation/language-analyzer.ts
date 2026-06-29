@@ -227,6 +227,27 @@ export function getSourceFragments(analysis: LanguageAnalysis | undefined): stri
   }
 }
 
+export function getSourceFragmentNames(analysis: LanguageAnalysis | undefined): { source: string; secondary: string[] } {
+  if (!analysis) return { source: "general", secondary: ["none"] };
+
+  const primaryName = analysis.primary.code;
+
+  switch (analysis.mode) {
+    case "single":
+      return { source: primaryName, secondary: ["none"] };
+
+    case "bilingual":
+    case "multilingual": {
+      const maxHints = analysis.mode === "bilingual" ? 1 : 2;
+      const hintNames = analysis.meaningful
+        .filter(d => d.code !== analysis.primary.code && d.score >= 0.10)
+        .slice(0, maxHints)
+        .map(d => `${d.code}_hint`);
+      return { source: primaryName, secondary: hintNames.length ? hintNames : ["none"] };
+    }
+  }
+}
+
 export function getLanguageUiLabel(analysis: LanguageAnalysis | undefined): string {
   if (!analysis) return "Original";
 
