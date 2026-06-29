@@ -26,7 +26,7 @@ import { SessionData } from "../session/types";
 import { transition } from "../session/transitions";
 import { Env } from "../env";
 import { translateLyrics } from "../services/translation";
-import { detectLanguage, getFlag, isLanguageDetected } from "../services/translation/detect";
+import { analyzeLanguages, isSourceLanguage, getLanguageUiLabel } from "../services/translation/language-analyzer";
 import { combineLyricsWithTranslation } from "../services/translation/combine";
 import { SUPPORTED_LANGUAGES, findLanguage, type LanguageCode } from "../services/translation/types";
 import type { InlineKeyboardButton } from "@grammyjs/types";
@@ -150,7 +150,7 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
   }
 
   session.telegraph.originalLyrics = fullLyrics;
-  session.telegraph.detectedLang = detectLanguage(fullLyrics) ?? undefined;
+  session.telegraph.languageAnalysis = analyzeLanguages(fullLyrics);
   session.telegraph.translatedLyrics = undefined;
   session.telegraph.activeLang = "original";
   await transition(session, SessionMode.IDLE, ctx.api, chatId);
@@ -514,7 +514,7 @@ async function handleTrackSelectionCallback(ctx: Context, session: SessionData, 
   }
 
   session.telegraph.originalLyrics = lyrics;
-  session.telegraph.detectedLang = detectLanguage(lyrics) ?? undefined;
+  session.telegraph.languageAnalysis = analyzeLanguages(lyrics);
   session.telegraph.url = telegraphResult.url;
   session.telegraph.path = telegraphResult.path;
   session.telegraph.data = telegraphResult.lastData;
@@ -700,7 +700,7 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
       return;
     }
 
-    if (isLanguageDetected(session.telegraph.detectedLang, langCode)) {
+    if (isSourceLanguage(session.telegraph.languageAnalysis, langCode)) {
       await safeAnswer(ctx, "Lyrics already appear to be in this language.");
       return;
     }
@@ -777,10 +777,10 @@ async function runTranslateAttempt(
   env: Env,
   lyrics: string,
   langCode: string,
-  sourceFrancCode?: string,
+  langAnalysis?: import("../services/translation/language-analyzer").LanguageAnalysis,
 ): Promise<TranslateAttempt> {
   try {
-    const result = await translateLyrics(env, lyrics, langCode as LanguageCode, sourceFrancCode);
+    const result = await translateLyrics(env, lyrics, langCode as LanguageCode, langAnalysis);
     if (result.type === "rate_limited") {
       return { kind: "rate_limited", cooldownUntil: Date.now() + result.retryAfterSeconds * 1000 };
     }
@@ -822,12 +822,12 @@ async function executeTranslation(
   session.telegraph.translationRequestId = requestId;
   const snapshotOriginal = originalLyrics;
 
-  // Read detected source language (franc code) for prompt composition
-  const detectedLang = session.telegraph.detectedLang;
+  // Read detected source language for prompt composition
+  const langAnalysis = session.telegraph.languageAnalysis;
 
   await safeEdit(ctx.api, cid!, pickerMsgId!, "🌐 Translating lyrics...\nPlease wait (~10–20s)");
 
-  const attempt = await runTranslateAttempt(env, snapshotOriginal, langCode, detectedLang);
+  const attempt = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis);
   if (attempt.kind === "rate_limited") {
     session.telegraph.isTranslating = false;
     session.telegraph.translationCooldownUntil = attempt.cooldownUntil;
@@ -870,7 +870,7 @@ async function executeTranslation(
 
     await safeEdit(ctx.api, cid!, pickerMsgId!, "🔄 Retrying translation...");
 
-    const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, detectedLang);
+    const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis);
     if (retry.kind === "rate_limited") {
       session.telegraph.isTranslating = false;
       session.telegraph.translationCooldownUntil = retry.cooldownUntil;
@@ -919,7 +919,7 @@ function buildRateLimitKeyboard(): InlineKeyboardButton[][] {
 }
 
 function buildLanguagePickerKeyboard(session: SessionData): InlineKeyboardButton[][] {
-  const detected = session.telegraph.detectedLang;
+  const analysis = session.telegraph.languageAnalysis;
   const buttons: InlineKeyboardButton[][] = [[]];
 
   for (const lang of SUPPORTED_LANGUAGES) {
@@ -929,8 +929,7 @@ function buildLanguagePickerKeyboard(session: SessionData): InlineKeyboardButton
   const hasCachedTranslation = session.telegraph.translatedLyrics &&
     Object.keys(session.telegraph.translatedLyrics).length > 0;
   if (hasCachedTranslation && session.telegraph.activeLang !== "original") {
-    const flag = detected ? getFlag(detected) : "";
-    const label = flag ? `${flag} Original` : "Original";
+    const label = getLanguageUiLabel(analysis);
     buttons.unshift([{ text: label, callback_data: "translate:lang:original" }]);
   }
 
