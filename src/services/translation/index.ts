@@ -33,7 +33,7 @@ export async function translateLyrics(
   const provider = env.TRANSLATION_PROVIDER ?? "gemini";
 
   if (provider === "gemini") {
-    return await geminiTranslate(env, prompt.system, prompt.user);
+    return await geminiTranslate(env, prompt.system, prompt.user, prompt.modules);
   }
 
   warn("translateLyrics: unknown provider", provider);
