@@ -3,6 +3,7 @@ import { geminiTranslate, GeminiResult } from "./gemini";
 import { composeTranslationPrompt } from "./prompts";
 import { findLanguage, LanguageCode } from "./types";
 import { warn } from "../../utils/logger";
+import { LanguageAnalysis } from "./language-analyzer";
 
 export type { GeminiResult };
 
@@ -10,7 +11,7 @@ export async function translateLyrics(
   env: Env,
   lyrics: string,
   targetLangCode: LanguageCode,
-  sourceFrancCode?: string,
+  langAnalysis?: LanguageAnalysis,
 ): Promise<GeminiResult> {
   if (!lyrics?.trim()) {
     return { type: "error" };
@@ -27,7 +28,7 @@ export async function translateLyrics(
     return { type: "error" };
   }
 
-  const prompt = composeTranslationPrompt(lyrics, language, sourceFrancCode);
+  const prompt = composeTranslationPrompt(lyrics, language, langAnalysis);
 
   const provider = env.TRANSLATION_PROVIDER ?? "gemini";
 

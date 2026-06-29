@@ -48,14 +48,3 @@ FINAL OUTPUT BEHAVIOR:
 - The output must read like it was originally written in natural target-language lyrics, not like a translation.
 - If a literal structure feels translated or unnatural, freely restructure the line while preserving meaning.
 `;
-
-export const JAPANESE_HINT = `SOURCE LANGUAGE — JAPANESE:
-- Focus on natural meaning-based translation rather than literal structure.
-- Reconstruct lines into fluent target-language phrasing instead of following Japanese syntax.
-- Infer omitted subjects and objects from context so the translation reads complete and natural.
-- Convert sentence-ending particles into tone (emotion, emphasis, softness) rather than words.
-- Render onomatopoeia and sound symbolism as meaning or imagery, not literal sounds or romanization.
-- Interpret politeness and speech level through tone rather than direct equivalents.
-- Keep recurring phrases consistent where possible.
-- Prioritize emotional intent and lyrical flow over literal accuracy.
-`;

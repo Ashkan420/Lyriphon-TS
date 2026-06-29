@@ -34,12 +34,3 @@ FINAL OUTPUT BEHAVIOR:
 - The output should read as though it was originally written in the target language, not translated.
 - Freely restructure lines whenever doing so improves naturalness without changing the intended meaning.
 `;
-
-
-export const GERMAN_HINT = `SOURCE LANGUAGE — GERMAN:
-- Focus on natural, meaning-based translation into the target language.
-- Do not translate German structure literally; prioritize fluent target-language phrasing.
-- Interpret compounds, idioms, and abstract expressions by their intended meaning.
-- Treat modal particles as tone and emotional nuance rather than words.
-- Preserve emotional intensity and lyrical impact over literal phrasing.
-`;
