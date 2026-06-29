@@ -84,6 +84,19 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     await ctx.reply(`Debug logging ${enabled ? "enabled" : "disabled"}.`);
   });
 
+  bot.command("multilingual", async (ctx) => {
+    if (env.BOT_OWNER_ID && String(ctx.from?.id) !== env.BOT_OWNER_ID) {
+      return;
+    }
+    const current = sessionDo.sessionData.telegraph.multilingualEnabled ?? true;
+    const arg = (typeof ctx.match === "string" ? ctx.match : "").trim().toLowerCase();
+    const enabled = arg === "on" || arg === "off"
+      ? arg === "on"
+      : !current;
+    sessionDo.sessionData.telegraph.multilingualEnabled = enabled;
+    await ctx.reply(`Multilingual mode ${enabled ? "enabled" : "disabled"}.`);
+  });
+
   bot.on("message:text", async (ctx) => {
     const session = getSession(sessionDo.sessionData);
     if (session.mode === SessionMode.EDIT_FIELD || session.mode === SessionMode.EDIT_LYRICS) {

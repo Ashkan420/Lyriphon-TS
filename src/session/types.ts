@@ -57,6 +57,7 @@ export interface TelegraphFlowData extends BaseFlowData {
   translationCooldownUntil?: number;
   pendingTranslationLang?: string;
   languageAnalysis?: import("../services/translation/language-analyzer").LanguageAnalysis;
+  multilingualEnabled?: boolean;
 }
 
 export interface SessionData {

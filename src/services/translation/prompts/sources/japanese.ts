@@ -2,49 +2,29 @@
 // subjects, and sentence-final nuance rarely survive a literal rendering, so
 // these rules push toward meaning-first, natural output in the target language.
 
-export const JAPANESE_SOURCE = `SOURCE LANGUAGE — JAPANESE:
+export const JAPANESE_SOURCE = `SOURCE LANGUAGE — JAPANESE
 
 CORE TRANSLATION RULES:
-- Translate MEANING, not grammar. Do NOT preserve Japanese word order or sentence structure; rebuild each line so it reads naturally in the target language.
-- Treat each line as a self-contained semantic unit first, then reconstruct fluently in the target language.
+- Translate meaning, not grammar. Do NOT preserve Japanese word order; reconstruct each line naturally in the target language.
+- Treat each line as a self-contained unit, then refine using full-song context.
+- Infer omitted subjects/objects from context and emotion. If unclear, default to speaker ("I/we") or addressee ("you").
+- Never output incomplete sentences in the target language.
 
-SUBJECT & OBJECT INFERENCE:
-- Japanese frequently omits subjects, objects, and sometimes verbs.
-- Infer missing elements from context, previous lines, and implied speaker perspective.
-- Default rule:
-  - If unclear, assume the speaker ("I / we") or addressee ("you") based on emotional context.
-- NEVER leave a line structurally incomplete in the target language.
+TONE & STRUCTURE:
+- Sentence-ending particles (ね, よ, な, etc.) encode tone, not meaning; convert into natural emotional equivalents.
+- Do NOT transliterate or preserve Japanese onomatopoeia (e.g. ドキドキ); translate into emotion or imagery.
+- Honorifics and speech levels (keigo, casual forms) must be expressed through tone, not literal markers.
 
-NUANCE & SENTENCE ENDINGS:
-- Sentence-final particles (ね, よ, な, ぞ, だろう, でしょう, etc.) and elongated endings encode tone, not meaning.
-- Convert them into natural target-language effects such as certainty, emphasis, softness, hesitation, or emotional weight.
-- NEVER translate particles literally or preserve them as words.
-
-ONOMATOPOEIA & SOUND SYMBOLISM:
-- Japanese giongo/gitaigo (e.g. ドキドキ, キラキラ, ふわふわ) must NOT be transliterated.
-- Convert them into:
-  - equivalent emotional descriptions, or
-  - natural sensory imagery in the target language
-- If no equivalent exists, prioritize emotional effect over literal sound imitation.
-
-REGISTER & SPEECH LEVELS:
-- Honorifics and speech styles (keigo, casual form, -です / -だ / -よ / -ね distinctions) do NOT map directly into most languages.
-- Preserve their social/emotional function (polite, intimate, distant, assertive) through tone and wording only.
-- Do NOT invent honorific markers in the target language.
-
-LEXICAL CONSISTENCY:
-- Maintain consistent translations for recurring phrases, hooks, and repeated lyrical motifs.
-- If a phrase is intentionally repeated in Japanese, reflect that repetition naturally in the target language.
-
-WORDS THAT SHOULD REMAIN UNCHANGED:
-- Keep proper nouns, artist-specific terms, and intentional English/Japanese loanwords if they are stylistically meaningful in the original.
-- If a phrase is commonly known in Japanese pop culture (catchphrases, hooks), prefer consistency over variation.
+LEXICAL RULES:
+- Preserve proper nouns, titles, and stylistic loanwords unless translation is clearly better.
+- Keep translations consistent across repeated phrases and motifs.
+- Preserve intentional repetition unless context requires change.
 
 EMOTIONAL PRIORITY:
-- Always prioritize emotional intent, atmosphere, and lyrical rhythm over literal meaning.
-- Japanese lyrics often rely on implication and silence; ensure the translation makes implicit meaning explicit when necessary for clarity.
+- Prioritize emotion, atmosphere, and lyrical flow over literal accuracy.
+- Make implied meaning explicit when needed for clarity in the target language.
+- Output must read like an original lyric, not a translation.
 
-FINAL OUTPUT BEHAVIOR:
-- The output must read like it was originally written in natural target-language lyrics, not like a translation.
-- If a literal structure feels translated or unnatural, freely restructure the line while preserving meaning.
+FINAL BEHAVIOR:
+- Do not add explanations, commentary, or extra formatting.
 `;
