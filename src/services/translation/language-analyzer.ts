@@ -1,6 +1,6 @@
 import { francAll } from "franc";
 import { debug } from "../../utils/logger";
-import { FRANC_TO_LANG, getFlag } from "./detect";
+import { getFlag } from "./detect";
 import { GENERAL_SOURCE } from "./prompts/sources/general";
 import { JAPANESE_SOURCE } from "./prompts/sources/japanese";
 import { GERMAN_SOURCE } from "./prompts/sources/german";
@@ -31,109 +31,144 @@ export interface LanguageAnalysis {
   all: DetectedLanguage[];
 }
 
-const DOMINANCE_THRESHOLD = 0.35;
-const MIN_SCORE = 0.10;
-const MEANINGFUL_SCORE = 0.20;
-const MIN_LENGTH = 50;
-const SCRIPT_MIN_RATIO = 0.15;
+const FRANC_TO_CANONICAL: Record<string, string> = {
+  deu: "de", nds: "de", gsw: "de", bar: "de",
+  nld: "nl", afr: "nl",
+  dan: "da", swe: "sv", nob: "no", nno: "no",
+  eng: "en", jpn: "ja", kor: "ko", spa: "es",
+  fra: "fr", fas: "fa", pes: "fa",
+  por: "pt", ara: "ar", tur: "tr", hin: "hi",
+  ita: "it", rus: "ru", zho: "zh",
+};
 
 const SCRIPT_PATTERNS: Array<{ regex: RegExp; code: string }> = [
-  { regex: /[\u3040-\u309F\u30A0-\u30FF]/, code: "jpn" },
-  { regex: /[\uAC00-\uD7AF]/, code: "kor" },
-  { regex: /[\u0600-\u06FF]/, code: "fas" },
-  { regex: /[\u0900-\u097F]/, code: "hin" },
-  { regex: /[\u0400-\u04FF]/, code: "rus" },
+  { regex: /[\u3040-\u309F\u30A0-\u30FF]/, code: "ja" },
+  { regex: /[\uAC00-\uD7AF]/, code: "ko" },
+  { regex: /[\u0600-\u06FF]/, code: "fa" },
+  { regex: /[\u0900-\u097F]/, code: "hi" },
+  { regex: /[\u0400-\u04FF]/, code: "ru" },
 ];
 
+const SCRIPT_BOOST = 0.3;
+const DIALECT_CAP = 1.2;
+const MIN_LENGTH = 50;
+
 const SOURCE_FRAGMENTS: Record<string, string> = {
-  jpn: JAPANESE_SOURCE,
-  deu: GERMAN_SOURCE,
-  kor: KOREAN_SOURCE,
-  spa: SPANISH_SOURCE,
-  fra: FRENCH_SOURCE,
-  fas: PERSIAN_SOURCE,
-  pes: PERSIAN_SOURCE,
+  ja: JAPANESE_SOURCE,
+  de: GERMAN_SOURCE,
+  ko: KOREAN_SOURCE,
+  es: SPANISH_SOURCE,
+  fr: FRENCH_SOURCE,
+  fa: PERSIAN_SOURCE,
 };
 
 const SOURCE_HINTS: Record<string, string> = {
-  jpn: JAPANESE_HINT,
-  deu: GERMAN_HINT,
-  kor: KOREAN_HINT,
-  spa: SPANISH_HINT,
-  fra: FRENCH_HINT,
-  fas: PERSIAN_HINT,
-  pes: PERSIAN_HINT,
+  ja: JAPANESE_HINT,
+  de: GERMAN_HINT,
+  ko: KOREAN_HINT,
+  es: SPANISH_HINT,
+  fr: FRENCH_HINT,
+  fa: PERSIAN_HINT,
 };
 
-const SUPPORTED_FRANC_CODES = new Set([
-  ...Object.keys(SOURCE_FRAGMENTS),
-  "eng",
-]);
+function normalizeFranc(results: readonly (string | number)[][]): Map<string, number> {
+  const raw = new Map<string, number>();
+  for (const [code, score] of results) {
+    const canonical = FRANC_TO_CANONICAL[code as string];
+    if (!canonical) continue;
+    raw.set(canonical, Math.max(raw.get(canonical) ?? 0, score as number));
+  }
 
-function detectByScript(lyrics: string): DetectedLanguage | null {
+  const capped = new Map<string, number>();
+  for (const [code, score] of raw) {
+    capped.set(code, Math.min(score, DIALECT_CAP));
+  }
+  return capped;
+}
+
+function applyScriptBoost(scores: Map<string, number>, lyrics: string): void {
   const totalChars = lyrics.replace(/\s/g, "").length;
-  if (totalChars === 0) return null;
+  if (totalChars === 0) return;
 
   for (const { regex, code } of SCRIPT_PATTERNS) {
     const matches = lyrics.match(new RegExp(regex.source, "g"));
     if (matches) {
       const ratio = matches.length / totalChars;
-      if (ratio > SCRIPT_MIN_RATIO) {
-        return { code, score: Math.min(ratio * 2, 0.95) };
+      if (ratio > 0.15) {
+        const current = scores.get(code) ?? 0;
+        scores.set(code, current + ratio * SCRIPT_BOOST);
       }
     }
   }
-  return null;
+}
+
+function hardFilter(scores: Map<string, number>): DetectedLanguage[] {
+  const MIN_SCORE = 0.15;
+  const MAX_LANGS = 4;
+  return [...scores.entries()]
+    .filter(([, s]) => s >= MIN_SCORE)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_LANGS)
+    .map(([code, score]) => ({ code, score }));
+}
+
+function normalizeToShares(languages: DetectedLanguage[]): DetectedLanguage[] {
+  const total = languages.reduce((sum, d) => sum + d.score, 0);
+  if (total === 0) return languages;
+  return languages.map(d => ({ ...d, score: d.score / total }));
+}
+
+function classify(languages: DetectedLanguage[]): LanguageAnalysis {
+  const primary = languages[0];
+  const secondary = languages[1];
+
+  const primaryShare = primary.score;
+  const secondaryShare = secondary?.score ?? 0;
+
+  let mode: LanguageMode;
+  if (primaryShare > 0.80) {
+    mode = "single";
+  } else if (secondaryShare > 0.15) {
+    mode = "bilingual";
+  } else {
+    mode = "multilingual";
+  }
+
+  const meaningful = languages.filter(d => d.score >= 0.10);
+  return {
+    mode,
+    primary,
+    secondary: secondaryShare > 0.10 ? secondary : undefined,
+    meaningful,
+    all: languages,
+  };
 }
 
 export function analyzeLanguages(lyrics: string): LanguageAnalysis | undefined {
-  const scriptResult = detectByScript(lyrics);
-  debug("analyzeLanguages:script", { result: scriptResult });
+  const francRaw = francAll(lyrics, { minLength: MIN_LENGTH });
+  const scores = normalizeFranc(francRaw);
+  applyScriptBoost(scores, lyrics);
+  const filtered = hardFilter(scores);
 
-  const francResults = francAll(lyrics, { minLength: MIN_LENGTH });
-  const supported = francResults
-    .filter(([code, score]) => score >= MIN_SCORE && SUPPORTED_FRANC_CODES.has(code))
-    .map(([code, score]) => ({ code, score }));
-
-  debug("analyzeLanguages:franc_supported", {
-    total: francResults.length,
-    supportedCount: supported.length,
-    supported: supported.slice(0, 10),
+  debug("analyzeLanguages:pipeline", {
+    francCount: francRaw.length,
+    afterNormalize: [...scores.entries()].slice(0, 5),
+    filtered,
   });
 
-  const all = scriptResult
-    ? [scriptResult, ...supported.filter(r => r.code !== scriptResult.code)]
-        .sort((a, b) => b.score - a.score)
-    : supported;
+  if (!filtered.length) return undefined;
 
-  if (!all.length) {
-    debug("analyzeLanguages:no_results");
-    return undefined;
-  }
-
-  const primary = all[0];
-  const meaningful = all.filter(d => d.score >= MEANINGFUL_SCORE);
-  const secondary = meaningful.length >= 2 ? meaningful[1] : undefined;
-
-  let mode: LanguageMode;
-  if (meaningful.length >= 3) {
-    mode = "multilingual";
-  } else if (secondary && (primary.score - secondary.score) < DOMINANCE_THRESHOLD) {
-    mode = "bilingual";
-  } else {
-    mode = "single";
-  }
+  const shared = normalizeToShares(filtered);
+  const result = classify(shared);
 
   debug("analyzeLanguages:result", {
-    mode,
-    primary,
-    secondary,
-    meaningfulCount: meaningful.length,
-    allCount: all.length,
-    all: all.slice(0, 5),
+    mode: result.mode,
+    primary: result.primary,
+    secondary: result.secondary,
+    all: result.all.slice(0, 4),
   });
 
-  return { mode, primary, secondary, meaningful, all };
+  return result;
 }
 
 export function isSourceLanguage(
@@ -142,8 +177,8 @@ export function isSourceLanguage(
 ): boolean {
   if (!analysis) return false;
   return (
-    FRANC_TO_LANG[analysis.primary.code] === targetLangCode
-    && analysis.primary.score >= 0.75
+    analysis.primary.code === targetLangCode
+    && analysis.primary.score > 0.85
   );
 }
 
@@ -156,19 +191,14 @@ export function getSourceFragments(analysis: LanguageAnalysis | undefined): stri
     case "single":
       return [primaryFragment];
 
-    case "bilingual": {
-      const hintFragment = analysis.secondary
-        ? (SOURCE_HINTS[analysis.secondary.code] ?? GENERAL_HINT)
-        : GENERAL_HINT;
-      return [primaryFragment, hintFragment];
-    }
-
+    case "bilingual":
     case "multilingual": {
+      const maxHints = analysis.mode === "bilingual" ? 1 : 2;
       const hints = analysis.meaningful
-        .filter(d => d.code !== analysis.primary.code && d.score >= 0.25)
-        .slice(0, 1)
+        .filter(d => d.code !== analysis.primary.code && d.score >= 0.10)
+        .slice(0, maxHints)
         .map(d => SOURCE_HINTS[d.code] ?? GENERAL_HINT);
-      return [GENERAL_SOURCE, ...hints];
+      return [primaryFragment, ...hints];
     }
   }
 }
