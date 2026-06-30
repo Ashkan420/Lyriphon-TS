@@ -1,28 +1,28 @@
 const LANGUAGE_NOTES: Record<string, string[]> = {
   ja: [
-    "Infer omitted subjects and objects where needed so meaning remains clear.",
+    "Translate all Japanese text into the target language. Do not leave Japanese phrases untranslated.",
     "Sentence-final particles (ね, よ, な, だろう, でしょう) carry emotional tone rather than literal meaning — reflect as nuance.",
     "When Japanese appears inside mixed lines, adjust its tone to fit the surrounding language rather than translating in isolation.",
   ],
   de: [
-    "Interpret German phrases by meaning rather than structure.",
+    "Translate all German text into the target language. Do not leave German phrases untranslated.",
     "Unpack compound nouns (Sehnsucht, Fernweh, Weltschmerz) into natural equivalents.",
-    "Treat modal particles (doch, ja, mal, halt, eben, schon) as tone markers, not words to translate.",
+    "Treat modal particles (doch, ja, mal, halt, eben, schon) as tone markers — convey through phrasing in the target language.",
   ],
   ko: [
-    "Infer omitted subjects, render implied meaning naturally.",
+    "Translate all Korean text into the target language. Do not leave Korean phrases untranslated.",
     "Do not preserve Korean word order or honorific suffixes.",
   ],
   es: [
-    "Render Spanish idioms and figurative phrasing by meaning, not literally.",
+    "Translate all Spanish text into the target language. Do not leave Spanish phrases untranslated.",
     "Preserve emotional register.",
   ],
   fr: [
-    "Render French idiom and figurative phrasing by meaning, not literally.",
+    "Translate all French text into the target language. Do not leave French phrases untranslated.",
     "Preserve emotional register.",
   ],
   fa: [
-    "Render Persian metaphors and idioms into natural target phrasing rather than literal images.",
+    "Translate all Persian text into the target language. Do not leave Persian phrases untranslated.",
     "Preserve emotional intensity.",
   ],
 };

@@ -97,16 +97,19 @@ function mergeResults(
 ): DetectedLanguage[] {
   const FRANC_WEIGHT = script ? 0.4 : 1.0;
 
-  const entries: DetectedLanguage[] = [];
+  const byCode = new Map<string, number>();
   for (const [code, score] of francScores) {
-    entries.push({ code, score: score * FRANC_WEIGHT });
+    byCode.set(code, score * FRANC_WEIGHT);
   }
 
   if (script) {
-    entries.push({ code: script.code, score: 1.0 });
+    const existing = byCode.get(script.code) ?? 0;
+    byCode.set(script.code, Math.max(existing, 1.0));
   }
 
-  return entries.sort((a, b) => b.score - a.score);
+  return [...byCode.entries()]
+    .map(([code, score]) => ({ code, score }))
+    .sort((a, b) => b.score - a.score);
 }
 
 function hardFilter(languages: DetectedLanguage[]): DetectedLanguage[] {
@@ -241,19 +244,6 @@ export function getSourceFragmentNames(analysis: LanguageAnalysis | undefined, m
 
 export function getLanguageUiLabel(analysis: LanguageAnalysis | undefined): string {
   if (!analysis) return "Original";
-
   const flag = getFlag(analysis.primary.code) ?? "";
-
-  switch (analysis.mode) {
-    case "single":
-      return flag ? `${flag} Original` : "Original";
-    case "bilingual": {
-      const sFlag = analysis.secondary ? getFlag(analysis.secondary.code) : "";
-      return sFlag
-        ? `${flag} Original (${analysis.primary.code.toUpperCase()} + ${analysis.secondary!.code.toUpperCase()})`
-        : `${flag} Original · Mixed`;
-    }
-    case "multilingual":
-      return flag ? `${flag} Original · Mixed` : "Original";
-  }
+  return flag ? `${flag} Original` : "Original";
 }
