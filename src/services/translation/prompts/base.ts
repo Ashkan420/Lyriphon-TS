@@ -26,5 +26,8 @@ TRANSLATION RULES:
 15. Preserve repetition unless context requires change.
 16. Avoid unnecessary slang unless clearly present in the original.
 17. Do not re-translate text already in the target language; keep it unchanged.
-
-These rules apply at all times and override stylistic preferences.`;
+18. Render idioms, proverbs, and set expressions by meaning, not literal translation.
+19. Preserve metaphors when they are understandable; otherwise adapt them into equivalent emotional imagery in the target language.
+20. When subjects or objects are omitted, infer them only when clearly implied; otherwise keep phrasing general rather than guessing incorrectly.
+21. If idioms, cultural references, or expressions are unclear, infer meaning only from strong contextual signals; otherwise prefer a neutral, natural rendering over speculative detail.
+22. Prioritize fluent, natural target-language lyrics even when the source is ambiguous or structurally unclear.`;

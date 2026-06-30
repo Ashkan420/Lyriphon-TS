@@ -1,6 +1,5 @@
 import { SupportedLanguage, LanguageCode } from "../types";
 import { BASE_PROMPT } from "./base";
-import { GENERAL_SOURCE } from "./sources/general";
 import { ENGLISH_TARGET } from "./targets/english";
 import { FARSI_TARGET } from "./targets/farsi";
 import { LanguageAnalysis, getSourceFragments, getSourceFragmentNames } from "../language-analyzer";
