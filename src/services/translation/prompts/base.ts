@@ -30,4 +30,9 @@ TRANSLATION RULES:
 19. Preserve metaphors when they are understandable; otherwise adapt them into equivalent emotional imagery in the target language.
 20. When subjects or objects are omitted, infer them only when clearly implied; otherwise keep phrasing general rather than guessing incorrectly.
 21. If idioms, cultural references, or expressions are unclear, infer meaning only from strong contextual signals; otherwise prefer a neutral, natural rendering over speculative detail.
-22. Prioritize fluent, natural target-language lyrics even when the source is ambiguous or structurally unclear.`;
+22. Prioritize fluent, natural target-language lyrics even when the source is ambiguous or structurally unclear.
+
+MULTILINGUAL SONGS:
+23. When a song contains multiple languages, translate ALL foreign text into the target language. Do not leave any foreign phrases untranslated unless rule 24 applies.
+24. EXCEPTION: If a foreign phrase is a well-known title, catchphrase, or iconic expression AND its meaning is clearly conveyed in surrounding lines, you MAY keep the original phrase untranslated. Use judgment — if removing the original loses emotional impact, translate it.
+25. When translating mixed-language lines, ensure the translation reads naturally as a single language, not as fragments stitched together.`;

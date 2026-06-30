@@ -1,29 +1,39 @@
+// Additional source-language fragments for secondary languages in multilingual
+// songs. These are NOT hints — they are full directives that tell the AI to
+// translate all text in that language, treating it as a co-equal source.
+
 const LANGUAGE_NOTES: Record<string, string[]> = {
   ja: [
-    "Translate all Japanese text into the target language. Do not leave Japanese phrases untranslated.",
+    "Translate ALL Japanese text into the target language. Do not leave any Japanese phrases untranslated.",
     "Sentence-final particles (ね, よ, な, だろう, でしょう) carry emotional tone rather than literal meaning — reflect as nuance.",
-    "When Japanese appears inside mixed lines, adjust its tone to fit the surrounding language rather than translating in isolation.",
+    "Honorifics and speech levels (keigo, casual forms) must be expressed through tone, not literal markers.",
+    "Make implied meaning explicit when needed for clarity in the target language.",
   ],
   de: [
-    "Translate all German text into the target language. Do not leave German phrases untranslated.",
-    "Unpack compound nouns (Sehnsucht, Fernweh, Weltschmerz) into natural equivalents.",
-    "Treat modal particles (doch, ja, mal, halt, eben, schon) as tone markers — convey through phrasing in the target language.",
+    "Translate ALL German text into the target language. Do not leave any German phrases untranslated.",
+    "Compound nouns (e.g. Sehnsucht, Fernweh, Weltschmerz, Angriff, Befreiung) should be rendered as natural concepts or expressions in the target language, not literal word splits.",
+    "Modal particles (doch, ja, mal, halt, eben, schon, etc.) express tone or attitude; reflect them through phrasing or omit if no natural equivalent exists.",
+    "German word order (e.g. verb-final clauses, separable verbs) must NOT be preserved. Always rebuild using target-language syntax.",
   ],
   ko: [
-    "Translate all Korean text into the target language. Do not leave Korean phrases untranslated.",
-    "Do not preserve Korean word order or honorific suffixes.",
+    "Translate ALL Korean text into the target language. Do not leave any Korean phrases untranslated.",
+    "Honorific and speech-level endings (-요, -습니다, -해, banmal vs. jondaetmal) signal social register, not literal words. Convey closeness or formality through tone.",
+    "Render Korean idioms and four-character expressions by their meaning rather than their literal images.",
   ],
   es: [
-    "Translate all Spanish text into the target language. Do not leave Spanish phrases untranslated.",
-    "Preserve emotional register.",
+    "Translate ALL Spanish text into the target language. Do not leave any Spanish phrases untranslated.",
+    "Diminutives and augmentatives (-ito/-ita, -ón) carry affection, emphasis, or irony, not literal size. Convey that feeling through tone and word choice.",
+    "Preserve the emotional register and rhythm of the original.",
   ],
   fr: [
-    "Translate all French text into the target language. Do not leave French phrases untranslated.",
-    "Preserve emotional register.",
+    "Translate ALL French text into the target language. Do not leave any French phrases untranslated.",
+    "The formal/informal distinction (vous vs. tu) usually has no target-language equivalent; convey closeness or distance through register, not invented words.",
+    "Preserve the emotional register and any wordplay; French lyrics often rely on double meanings.",
   ],
   fa: [
-    "Translate all Persian text into the target language. Do not leave Persian phrases untranslated.",
-    "Preserve emotional intensity.",
+    "Translate ALL Persian text into the target language. Do not leave any Persian phrases untranslated.",
+    "Persian lyrics are rich in metaphor, classical imagery, and idiom. Render these by their emotional meaning, not their literal images.",
+    "Preserve the emotional intensity and poetic weight.",
   ],
 };
 
@@ -41,5 +51,5 @@ export function getHintFragment(code: string): string {
   if (!notes) return "";
   const name = LANGUAGE_DISPLAY_NAMES[code] ?? code.toUpperCase();
   const lines = notes.map(n => `- ${n}`).join("\n");
-  return `LANGUAGE HINT — ${name} (secondary):\n${lines}\n- Primary language rules take precedence; this hint only adjusts interpretation and tone.`;
+  return `ADDITIONAL SOURCE LANGUAGE — ${name}:\n${lines}\n- Treat all text in this language as source material to be fully translated. Do not skip or leave any portion untranslated.`;
 }
