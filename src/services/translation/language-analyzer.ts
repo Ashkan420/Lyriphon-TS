@@ -154,6 +154,8 @@ function classify(languages: DetectedLanguage[]): LanguageAnalysis {
 }
 
 export function analyzeLanguages(lyrics: string): LanguageAnalysis | undefined {
+  if (!lyrics?.trim()) return undefined;
+
   const script = detectByScript(lyrics);
   debug("analyzeLanguages:script", { result: script });
 
