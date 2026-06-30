@@ -1,20 +1,13 @@
 import { francAll } from "franc";
 import { debug } from "../../utils/logger";
 import { getFlag } from "./detect";
-import { GENERAL_SOURCE } from "./prompts/sources/general";
 import { JAPANESE_SOURCE } from "./prompts/sources/japanese";
 import { GERMAN_SOURCE } from "./prompts/sources/german";
 import { KOREAN_SOURCE } from "./prompts/sources/korean";
 import { SPANISH_SOURCE } from "./prompts/sources/spanish";
 import { FRENCH_SOURCE } from "./prompts/sources/french";
 import { PERSIAN_SOURCE } from "./prompts/sources/persian";
-import { JAPANESE_HINT } from "./prompts/sources/japanese_hint";
-import { GERMAN_HINT } from "./prompts/sources/german_hint";
-import { KOREAN_HINT } from "./prompts/sources/korean_hint";
-import { SPANISH_HINT } from "./prompts/sources/spanish_hint";
-import { FRENCH_HINT } from "./prompts/sources/french_hint";
-import { PERSIAN_HINT } from "./prompts/sources/persian_hint";
-import { GENERAL_HINT } from "./prompts/sources/general_hint";
+import { getHintFragment } from "./prompts/hints";
 
 export interface DetectedLanguage {
   code: string;
@@ -60,15 +53,6 @@ const SOURCE_FRAGMENTS: Record<string, string> = {
   es: SPANISH_SOURCE,
   fr: FRENCH_SOURCE,
   fa: PERSIAN_SOURCE,
-};
-
-const SOURCE_HINTS: Record<string, string> = {
-  ja: JAPANESE_HINT,
-  de: GERMAN_HINT,
-  ko: KOREAN_HINT,
-  es: SPANISH_HINT,
-  fr: FRENCH_HINT,
-  fa: PERSIAN_HINT,
 };
 
 interface ScriptResult {
@@ -207,11 +191,13 @@ export function isSourceLanguage(
 }
 
 export function getSourceFragments(analysis: LanguageAnalysis | undefined, multilingualEnabled = true): string[] {
-  if (!analysis) return [GENERAL_SOURCE];
+  if (!analysis) return [];
 
-  const primaryFragment = SOURCE_FRAGMENTS[analysis.primary.code] ?? GENERAL_SOURCE;
+  const primaryFragment = SOURCE_FRAGMENTS[analysis.primary.code];
 
-  if (!multilingualEnabled) return [primaryFragment];
+  if (!primaryFragment || !multilingualEnabled) {
+    return primaryFragment ? [primaryFragment] : [];
+  }
 
   switch (analysis.mode) {
     case "single":
@@ -223,7 +209,8 @@ export function getSourceFragments(analysis: LanguageAnalysis | undefined, multi
       const hints = analysis.meaningful
         .filter(d => d.code !== analysis.primary.code && d.score >= 0.10)
         .slice(0, maxHints)
-        .map(d => SOURCE_HINTS[d.code] ?? GENERAL_HINT);
+        .map(d => getHintFragment(d.code))
+        .filter(Boolean);
       return [primaryFragment, ...hints];
     }
   }
