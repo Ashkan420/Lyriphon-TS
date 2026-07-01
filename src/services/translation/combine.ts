@@ -75,7 +75,9 @@ export function combineLyricsWithTranslation(
       parts.push("");
     } else {
       parts.push(orig);
-      parts.push(`[${trans}]`);
+      if (trans.trim() !== orig.trim()) {
+        parts.push(`[${trans}]`);
+      }
     }
   }
 
