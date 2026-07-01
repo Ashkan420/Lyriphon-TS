@@ -56,6 +56,7 @@ export function createTelegraphFlow(): TelegraphFlowData {
     translationCooldownUntil: undefined,
     pendingTranslationLang: undefined,
     languageAnalysis: undefined,
+    detectionMode: undefined,
   };
 }
 

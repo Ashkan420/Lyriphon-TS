@@ -150,7 +150,11 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env) {
   }
 
   session.telegraph.originalLyrics = fullLyrics;
-  session.telegraph.languageAnalysis = analyzeLanguages(fullLyrics);
+  session.telegraph.languageAnalysis = await analyzeLanguages(
+    fullLyrics,
+    session.telegraph.detectionMode,
+    env,
+  );
   session.telegraph.translatedLyrics = undefined;
   session.telegraph.activeLang = "original";
   await transition(session, SessionMode.IDLE, ctx.api, chatId);
@@ -514,7 +518,11 @@ async function handleTrackSelectionCallback(ctx: Context, session: SessionData, 
   }
 
   session.telegraph.originalLyrics = lyrics;
-  session.telegraph.languageAnalysis = analyzeLanguages(lyrics);
+  session.telegraph.languageAnalysis = await analyzeLanguages(
+    lyrics,
+    session.telegraph.detectionMode,
+    env,
+  );
   session.telegraph.url = telegraphResult.url;
   session.telegraph.path = telegraphResult.path;
   session.telegraph.data = telegraphResult.lastData;

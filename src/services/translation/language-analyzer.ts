@@ -1,5 +1,5 @@
 import { francAll } from "franc";
-import { debug } from "../../utils/logger";
+import { debug, warn } from "../../utils/logger";
 import { getFlag } from "./detect";
 import { JAPANESE_SOURCE } from "./prompts/sources/japanese";
 import { GERMAN_SOURCE } from "./prompts/sources/german";
@@ -8,6 +8,7 @@ import { SPANISH_SOURCE } from "./prompts/sources/spanish";
 import { FRENCH_SOURCE } from "./prompts/sources/french";
 import { PERSIAN_SOURCE } from "./prompts/sources/persian";
 import { getHintFragment } from "./prompts/hints";
+import { Env } from "../../env";
 
 export interface DetectedLanguage {
   code: string;
@@ -15,6 +16,7 @@ export interface DetectedLanguage {
 }
 
 export type LanguageMode = "single" | "bilingual" | "multilingual";
+export type DetectionMethod = "franc" | "gemini";
 
 export interface LanguageAnalysis {
   mode: LanguageMode;
@@ -22,7 +24,70 @@ export interface LanguageAnalysis {
   secondary?: DetectedLanguage;
   meaningful: DetectedLanguage[];
   all: DetectedLanguage[];
+  meta: {
+    method: DetectionMethod;
+    mode: "single" | "hybrid";
+    fallback?: true;
+  };
 }
+
+// --- Shared classification thresholds (method-aware) ---
+
+export const CLASSIFICATION_THRESHOLDS = {
+  franc: {
+    singlePrimaryShare: 0.80,
+    bilingualSecondaryShare: 0.15,
+    meaningfulMinScore: 0.10,
+    secondaryMinScore: 0.10,
+  },
+  gemini: {
+    singlePrimaryShare: 0.80,
+    bilingualSecondaryShare: 0.15,
+    meaningfulMinScore: 0.10,
+    secondaryMinScore: 0.10,
+  },
+} as const;
+
+// --- Single classification function (ONE place, ONE logic) ---
+
+export function classifyScores(
+  rawScores: DetectedLanguage[],
+  method: DetectionMethod,
+): LanguageAnalysis {
+  const t = CLASSIFICATION_THRESHOLDS[method];
+
+  const total = rawScores.reduce((sum, d) => sum + d.score, 0);
+  const all: DetectedLanguage[] = rawScores
+    .map(d => ({ ...d, score: total > 0 ? d.score / total : 0 }))
+    .sort((a, b) => b.score - a.score);
+
+  const primary = all[0];
+  const secondary = all[1];
+  const primaryShare = total > 0 ? primary.score / total : 1;
+  const secondaryShare = secondary && total > 0 ? secondary.score / total : 0;
+
+  let mode: LanguageMode;
+  if (primaryShare > t.singlePrimaryShare) {
+    mode = "single";
+  } else if (secondaryShare > t.bilingualSecondaryShare) {
+    mode = "bilingual";
+  } else {
+    mode = "multilingual";
+  }
+
+  const meaningful = all.filter(d => d.score >= t.meaningfulMinScore);
+
+  return {
+    mode,
+    primary: all[0],
+    secondary: secondaryShare > t.secondaryMinScore ? all[1] : undefined,
+    meaningful,
+    all,
+    meta: { method, mode: "single" },
+  };
+}
+
+// --- Franc detection pipeline ---
 
 const FRANC_TO_CANONICAL: Record<string, string> = {
   deu: "de", nds: "de", gsw: "de", bar: "de",
@@ -120,61 +185,34 @@ function hardFilter(languages: DetectedLanguage[]): DetectedLanguage[] {
     .slice(0, MAX_LANGS);
 }
 
-function classify(languages: DetectedLanguage[]): LanguageAnalysis {
-  const primary = languages[0];
-  const secondary = languages[1];
-
-  const total = languages.reduce((sum, d) => sum + d.score, 0);
-  const primaryShare = total > 0 ? primary.score / total : 1;
-  const secondaryShare = secondary && total > 0 ? secondary.score / total : 0;
-
-  let mode: LanguageMode;
-  if (primaryShare > 0.80) {
-    mode = "single";
-  } else if (secondaryShare > 0.15) {
-    mode = "bilingual";
-  } else {
-    mode = "multilingual";
-  }
-
-  const all = languages.map(d => ({
-    ...d,
-    score: total > 0 ? d.score / total : 0,
-  }));
-
-  const meaningful = all.filter(d => d.score >= 0.10);
-
-  return {
-    mode,
-    primary: all[0],
-    secondary: secondaryShare > 0.10 ? all[1] : undefined,
-    meaningful,
-    all,
-  };
-}
-
-export function analyzeLanguages(lyrics: string): LanguageAnalysis | undefined {
-  if (!lyrics?.trim()) return undefined;
-
+function francDetect(lyrics: string): DetectedLanguage[] | undefined {
   const script = detectByScript(lyrics);
-  debug("analyzeLanguages:script", { result: script });
+  debug("francDetect:script", { result: script });
 
   const francRaw = francAll(lyrics, { minLength: MIN_LENGTH });
-  debug("analyzeLanguages:francRawTop5", francRaw.slice(0, 5));
+  debug("francDetect:francRawTop5", francRaw.slice(0, 5));
 
   const francScores = normalizeFranc(francRaw);
-  debug("analyzeLanguages:francNormalized", [...francScores.entries()].slice(0, 5));
+  debug("francDetect:francNormalized", [...francScores.entries()].slice(0, 5));
 
   const merged = mergeResults(script, francScores);
-  debug("analyzeLanguages:merged", merged);
+  debug("francDetect:merged", merged);
 
   const filtered = hardFilter(merged);
-  debug("analyzeLanguages:filtered", filtered);
+  debug("francDetect:filtered", filtered);
 
   if (!filtered.length) return undefined;
+  return filtered;
+}
 
-  const result = classify(filtered);
-  debug("analyzeLanguages:result", {
+export function analyzeLanguagesFranc(lyrics: string): LanguageAnalysis | undefined {
+  if (!lyrics?.trim()) return undefined;
+
+  const raw = francDetect(lyrics);
+  if (!raw) return undefined;
+
+  const result = classifyScores(raw, "franc");
+  debug("analyzeLanguagesFranc:result", {
     mode: result.mode,
     primary: result.primary,
     secondary: result.secondary,
@@ -183,6 +221,76 @@ export function analyzeLanguages(lyrics: string): LanguageAnalysis | undefined {
 
   return result;
 }
+
+// --- Async dispatcher ---
+
+type DetectionMode = "franc" | "ai" | "hybrid";
+
+export async function analyzeLanguages(
+  lyrics: string,
+  mode?: DetectionMode,
+  env?: Env,
+): Promise<LanguageAnalysis | undefined> {
+  if (!lyrics?.trim()) return undefined;
+
+  const effectiveMode = mode ?? "franc";
+
+  // AI mode: always Gemini
+  if (effectiveMode === "ai" && env) {
+    debug("analyzeLanguages:mode_ai");
+    const { geminiDetectLanguages } = await import("./gemini-detect");
+    const result = await geminiDetectLanguages(env, lyrics);
+    if (result.type === "success") {
+      return result.analysis;
+    }
+    warn("analyzeLanguages:ai_failed_falling_back_to_franc", { type: result.type });
+    const francResult = analyzeLanguagesFranc(lyrics);
+    if (francResult) francResult.meta.fallback = true;
+    return francResult;
+  }
+
+  // Hybrid mode: franc first, Gemini refines if uncertain
+  if (effectiveMode === "hybrid" && env) {
+    debug("analyzeLanguages:mode_hybrid");
+    const raw = francDetect(lyrics);
+    if (!raw) return undefined;
+
+    const francAnalysis = classifyScores(raw, "franc");
+    francAnalysis.meta.mode = "hybrid";
+
+    // High confidence: single language with no meaningful secondary → skip Gemini
+    if (
+      francAnalysis.mode === "single" &&
+      francAnalysis.meaningful.length === 1
+    ) {
+      debug("analyzeLanguages:hybrid_franc_confident_skip_ai", {
+        primary: francAnalysis.primary,
+      });
+      return francAnalysis;
+    }
+
+    // Low confidence or multilingual → try Gemini
+    debug("analyzeLanguages:hybrid_franc_uncertain_try_ai", {
+      francMode: francAnalysis.mode,
+      meaningfulCount: francAnalysis.meaningful.length,
+    });
+    const { geminiDetectLanguages } = await import("./gemini-detect");
+    const aiResult = await geminiDetectLanguages(env, lyrics);
+    if (aiResult.type === "success") {
+      aiResult.analysis.meta.mode = "hybrid";
+      return aiResult.analysis;
+    }
+    warn("analyzeLanguages:hybrid_ai_failed_using_franc", { type: aiResult.type });
+    francAnalysis.meta.fallback = true;
+    return francAnalysis;
+  }
+
+  // Franc mode (default)
+  debug("analyzeLanguages:mode_franc");
+  return analyzeLanguagesFranc(lyrics);
+}
+
+// --- Prompt module selection helpers (unchanged) ---
 
 export function isSourceLanguage(
   analysis: LanguageAnalysis | undefined,

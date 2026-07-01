@@ -97,6 +97,53 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     await ctx.reply(`Multilingual mode ${enabled ? "enabled" : "disabled"}.`);
   });
 
+  bot.command("detection", async (ctx) => {
+    if (env.BOT_OWNER_ID && String(ctx.from?.id) !== env.BOT_OWNER_ID) {
+      return;
+    }
+
+    const session = getSession(sessionDo.sessionData);
+    const current = session.telegraph.detectionMode ?? "franc";
+    const arg = (typeof ctx.match === "string" ? ctx.match : "").trim().toLowerCase();
+
+    const MODES = ["franc", "hybrid", "ai"] as const;
+    type Mode = typeof MODES[number];
+
+    const LABELS: Record<Mode, string> = {
+      franc: "franc (statistical)",
+      hybrid: "hybrid (franc + AI refinement)",
+      ai: "AI (Gemini)",
+    };
+
+    const DESCRIPTIONS: Record<Mode, string> = {
+      franc: "Franc n-gram + script detection. Fast, free, no API calls.",
+      hybrid: "Franc first. If confident single language, done. If mixed/uncertain, Gemini refines.",
+      ai: "Always Gemini AI. Most accurate but slower, uses API quota.",
+    };
+
+    // No args → show current, cycle to next
+    if (!arg || !MODES.includes(arg as Mode)) {
+      const idx = MODES.indexOf(current);
+      const next = MODES[(idx + 1) % MODES.length];
+      session.telegraph.detectionMode = next;
+      await ctx.reply(
+        `Detection: ${LABELS[current]} \u2192 ${LABELS[next]}\n\n` +
+        `${DESCRIPTIONS[next]}\n\n` +
+        `Persists across songs. /detection franc|hybrid|ai to set directly.`
+      );
+      return;
+    }
+
+    // Explicit arg
+    const target = arg as Mode;
+    session.telegraph.detectionMode = target;
+    await ctx.reply(
+      `Detection set to: ${LABELS[target]}\n\n` +
+      `${DESCRIPTIONS[target]}\n\n` +
+      `Persists across songs. /detection to cycle.`
+    );
+  });
+
   bot.on("message:text", async (ctx) => {
     const session = getSession(sessionDo.sessionData);
     if (session.mode === SessionMode.EDIT_FIELD || session.mode === SessionMode.EDIT_LYRICS) {
