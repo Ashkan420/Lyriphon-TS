@@ -10,6 +10,10 @@ function normalizeLine(line: string): string {
   return line.replace(/\u200B/g, "").replace(/\u200C/g, "").trimEnd();
 }
 
+function stripTrailingPunctuation(s: string): string {
+  return s.trim().replace(/[.,!?;:'")\]]+$/, "");
+}
+
 export function combineLyricsWithTranslation(
   originalLyrics: string,
   translatedLyrics: string,
@@ -75,7 +79,7 @@ export function combineLyricsWithTranslation(
       parts.push("");
     } else {
       parts.push(orig);
-      if (trans.trim() !== orig.trim()) {
+      if (stripTrailingPunctuation(trans) !== stripTrailingPunctuation(orig)) {
         parts.push(`[${trans}]`);
       }
     }
