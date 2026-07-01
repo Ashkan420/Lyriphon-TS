@@ -60,6 +60,11 @@ export async function geminiTranslate(
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: systemPrompt }] },
             contents: [{ parts: [{ text: userPrompt }] }],
+            generationConfig: {
+              temperature: 0.1,
+              topP: 0.6,
+              topK: 10,
+            },
           }),
           signal: controller.signal,
         });
