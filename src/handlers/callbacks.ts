@@ -14,7 +14,7 @@ import {
   escapeMd,
 } from "../utils/telegram";
 import { buildTrackButtons } from "./songSearch";
-import { warn } from "../utils/logger";
+import { warn, debug } from "../utils/logger";
 import {
   resetFlow,
   SessionMode,
@@ -25,11 +25,18 @@ import { clearAudioState } from "../session/flows";
 import { SessionData } from "../session/types";
 import { transition } from "../session/transitions";
 import { Env } from "../env";
-import { translateLyrics } from "../services/translation";
+import { translateLyrics, refineTranslation, scoreTranslation } from "../services/translation";
 import { analyzeLanguages, isSourceLanguage, getLanguageUiLabel } from "../services/translation/language-analyzer";
 import { combineLyricsWithTranslation } from "../services/translation/combine";
 import { SUPPORTED_LANGUAGES, findLanguage, type LanguageCode } from "../services/translation/types";
 import type { InlineKeyboardButton } from "@grammyjs/types";
+import {
+  getActiveTranslation,
+  getHighScoreTranslation,
+  insertTranslation,
+  updateScore,
+  deactivateOldVersions,
+} from "../db/translations";
 
 const urlFields = ["track_link", "artist_link", "album_link", "cover"];
 
@@ -655,6 +662,11 @@ async function handleTranslateCallback(ctx: Context, session: SessionData, env: 
     return;
   }
 
+  if (data === "translate:refine") {
+    await handleRefineCallback(ctx, session, env);
+    return;
+  }
+
   if (data === "translate:lang:original") {
     await safeAnswer(ctx);
     const lastData = session.telegraph.data as any;
@@ -829,7 +841,19 @@ async function executeTranslation(
 
   await safeEdit(ctx.api, cid!, pickerMsgId!, "🌐 Translating lyrics...\nPlease wait (~10–20s)");
 
-  const attempt = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis, multilingualEnabled);
+  // Check D1 for high-score cached translation
+  const songId = hashString(snapshotOriginal);
+  debug("executeTranslation:checking_cache", { songId, langCode });
+  const existing = await getHighScoreTranslation(env.DB, songId, langCode);
+  if (existing) {
+    debug("executeTranslation:cache_hit", { score: existing.score, translationLen: existing.translation.length });
+  } else {
+    debug("executeTranslation:cache_miss");
+  }
+
+  const attempt = existing
+    ? { kind: "text" as const, text: existing.translation }
+    : await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis, multilingualEnabled);
   if (attempt.kind === "rate_limited") {
     session.telegraph.isTranslating = false;
     session.telegraph.translationCooldownUntil = attempt.cooldownUntil;
@@ -906,9 +930,221 @@ async function executeTranslation(
     }
   }
 
+  // Store in D1 with score=null (async scoring will update it)
+  if (!existing) {
+    try {
+      debug("executeTranslation:d1_insert", { songId, langCode, version: 1 });
+      const translationId = await insertTranslation(
+        env.DB, songId, langCode, originalHash,
+        snapshotOriginal, rawResult, null, 1
+      );
+      session.telegraph.activeTranslationId = translationId;
+      debug("executeTranslation:d1_inserted", { translationId });
+
+      // Background scoring (fire-and-forget, will complete after response)
+      debug("executeTranslation:starting_async_scoring");
+      scoreTranslation(env, snapshotOriginal, rawResult)
+        .then(async (scoreResult) => {
+          debug("executeTranslation:scoring_complete", { score: scoreResult.score });
+          await updateScore(env.DB, translationId, scoreResult.score);
+          debug("executeTranslation:score_updated_in_d1");
+          // Best-effort message edit
+          await safeEdit(ctx.api, cid!, pickerMsgId!,
+            `✅ Translated to ${language.name} (score: ${scoreResult.score})`,
+            { inline_keyboard: [[{ text: "✨ Refine", callback_data: "translate:refine" }]] }
+          );
+        })
+        .catch((e) => {
+          warn("async scoring failed", e);
+        });
+    } catch (e) {
+      warn("D1 insert failed", e);
+    }
+  } else {
+    debug("executeTranslation:using_cached_translation", { score: existing.score });
+  }
+
   session.telegraph.activeLang = langCode;
   resetTranslationState(session);
-  await safeEdit(ctx.api, cid!, pickerMsgId!, `✅ Lyrics translated to ${language.name}`);
+  await safeEdit(ctx.api, cid!, pickerMsgId!,
+    `✅ Lyrics translated to ${language.name}`,
+    { inline_keyboard: [[{ text: "✨ Refine", callback_data: "translate:refine" }]] }
+  );
+}
+
+async function handleRefineCallback(ctx: Context, session: SessionData, env: Env) {
+  const activeLang = session.telegraph.activeLang;
+  const activeTranslationId = session.telegraph.activeTranslationId;
+  const pickerMsgId = session.telegraph.translateMessageId;
+  const cid = chatId(ctx);
+
+  debug("refine:callback", { activeLang, activeTranslationId, isRefining: session.telegraph.isRefining });
+
+  if (!activeLang || activeLang === "original" || !activeTranslationId) {
+    debug("refine:guard_no_active");
+    await safeAnswer(ctx, "No active translation to refine");
+    return;
+  }
+
+  if (session.telegraph.isRefining) {
+    debug("refine:guard_already_refining");
+    await safeAnswer(ctx, "Refinement in progress");
+    return;
+  }
+
+  if (session.telegraph.isTranslating) {
+    debug("refine:guard_translating");
+    await safeAnswer(ctx, "Translation in progress");
+    return;
+  }
+
+  session.telegraph.isRefining = true;
+  await safeAnswer(ctx);
+
+  if (pickerMsgId && cid) {
+    await safeEdit(ctx.api, cid, pickerMsgId, "🔄 Refining translation...");
+  }
+
+  try {
+    const songId = hashString(session.telegraph.originalLyrics!);
+    debug("refine:fetch_active", { songId, activeLang });
+    const activeRow = await getActiveTranslation(env.DB, songId, activeLang);
+    if (!activeRow) {
+      debug("refine:no_active_row");
+      if (pickerMsgId && cid) {
+        await safeEdit(ctx.api, cid, pickerMsgId, "❌ No active translation found in database.");
+      }
+      session.telegraph.isRefining = false;
+      return;
+    }
+
+    const originalLyrics = activeRow.original_lyrics;
+    const currentTranslation = activeRow.translation;
+    const oldScore = activeRow.score ?? 50;
+    debug("refine:active_row", {
+      version: activeRow.version,
+      oldScore,
+      translationLen: currentTranslation.length,
+    });
+
+    const langAnalysis = session.telegraph.languageAnalysis;
+    const multilingualEnabled = session.telegraph.multilingualEnabled ?? true;
+
+    debug("refine:calling_refineTranslation");
+    const refineResult = await refineTranslation(
+      env, originalLyrics, currentTranslation, activeLang as LanguageCode,
+      langAnalysis, multilingualEnabled
+    );
+    debug("refine:refineResult", { type: refineResult.type });
+
+    if (refineResult.type === "rate_limited") {
+      debug("refine:rate_limited");
+      if (pickerMsgId && cid) {
+        await safeEdit(ctx.api, cid, pickerMsgId, "⏳ Rate limited. Try again in a moment.");
+      }
+      session.telegraph.isRefining = false;
+      return;
+    }
+
+    if (refineResult.type !== "success" || !refineResult.text) {
+      debug("refine:refine_failed");
+      if (pickerMsgId && cid) {
+        await safeEdit(ctx.api, cid, pickerMsgId, "❌ Refinement failed. Try again later.");
+      }
+      session.telegraph.isRefining = false;
+      return;
+    }
+
+    const refinedTranslation = refineResult.text;
+    debug("refine:refined_text", { len: refinedTranslation.length, lines: refinedTranslation.split("\n").length });
+
+    const originalLines = originalLyrics.replace(/\r\n/g, "\n").split("\n").map(l => l.trimEnd());
+    const refinedLines = refinedTranslation.replace(/\r\n/g, "\n").split("\n").map(l => l.trimEnd());
+
+    while (originalLines.length > 0 && originalLines[originalLines.length - 1].trim() === "") originalLines.pop();
+    while (refinedLines.length > 0 && refinedLines[refinedLines.length - 1].trim() === "") refinedLines.pop();
+
+    if (originalLines.length !== refinedLines.length) {
+      warn("refine: line count mismatch", { original: originalLines.length, refined: refinedLines.length });
+      if (pickerMsgId && cid) {
+        await safeEdit(ctx.api, cid, pickerMsgId, "❌ Refinement format error — try again");
+      }
+      session.telegraph.isRefining = false;
+      return;
+    }
+    debug("refine:line_count_ok", { lines: originalLines.length });
+
+    debug("refine:scoring");
+    const scoreResult = await scoreTranslation(env, originalLyrics, refinedTranslation);
+    const newScore = scoreResult.score;
+    debug("refine:scored", { newScore, oldScore, issues: scoreResult.issues });
+
+    const isHighScoreAlready = oldScore >= 90;
+    debug("refine:decision", { isHighScoreAlready, passesGate: newScore >= oldScore + 3 && newScore >= 85 });
+
+    if (!isHighScoreAlready && newScore >= oldScore + 3 && newScore >= 85) {
+      debug("refine:accepting_new_version");
+      const version = activeRow.version + 1;
+      const originalHash = activeRow.original_hash;
+
+      const newId = await insertTranslation(env.DB, songId, activeLang, originalHash, originalLyrics, refinedTranslation, newScore, version);
+      await deactivateOldVersions(env.DB, songId, activeLang, newId);
+
+      session.telegraph.activeTranslationId = newId;
+
+      const cacheKey = `${activeLang}:${originalHash}`;
+      if (!session.telegraph.translatedLyrics) session.telegraph.translatedLyrics = {};
+      session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: refinedTranslation };
+
+      const combined = combineLyricsWithTranslation(originalLyrics, refinedTranslation);
+      if (combined) {
+        const lastData = session.telegraph.data as any;
+        if (lastData) {
+          await tryEditSongPage(env, lastData, combined, "after refine");
+        }
+      }
+
+      debug("refine:accepted", { version, newScore });
+      if (pickerMsgId && cid) {
+        await safeEdit(ctx.api, cid, pickerMsgId,
+          `✅ Refined (score: ${oldScore} → ${newScore})`,
+          { inline_keyboard: [[{ text: "✨ Refine", callback_data: "translate:refine" }]] }
+        );
+      }
+    } else if (isHighScoreAlready) {
+      debug("refine:personal_only");
+      const combined = combineLyricsWithTranslation(originalLyrics, refinedTranslation);
+      if (combined) {
+        const lastData = session.telegraph.data as any;
+        if (lastData) {
+          await tryEditSongPage(env, lastData, combined, "after refine personal");
+        }
+      }
+
+      if (pickerMsgId && cid) {
+        await safeEdit(ctx.api, cid, pickerMsgId,
+          `✅ Refined for you (${oldScore} → ${newScore})`,
+          { inline_keyboard: [[{ text: "✨ Refine", callback_data: "translate:refine" }]] }
+        );
+      }
+    } else {
+      debug("refine:no_improvement", { newScore, oldScore });
+      if (pickerMsgId && cid) {
+        await safeEdit(ctx.api, cid, pickerMsgId,
+          `✅ Already good (score: ${newScore})`,
+          { inline_keyboard: [[{ text: "✨ Refine", callback_data: "translate:refine" }]] }
+        );
+      }
+    }
+  } catch (error) {
+    warn("handleRefineCallback failed", error);
+    if (pickerMsgId && cid) {
+      await safeEdit(ctx.api, cid, pickerMsgId, "❌ Refinement failed. Try again later.");
+    }
+  } finally {
+    debug("refine:done");
+    session.telegraph.isRefining = false;
+  }
 }
 
 function buildRateLimitKeyboard(): InlineKeyboardButton[][] {
