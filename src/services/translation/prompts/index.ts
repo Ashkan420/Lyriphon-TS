@@ -1,5 +1,6 @@
 import { SupportedLanguage, LanguageCode } from "../types";
 import { BASE_PROMPT } from "./base";
+import { REFINER_BASE } from "./refiner";
 import { ENGLISH_TARGET } from "./targets/english";
 import { FARSI_TARGET } from "./targets/farsi";
 import { LanguageAnalysis, getSourceFragments, getSourceFragmentNames } from "../language-analyzer";
@@ -35,4 +36,27 @@ export function composeTranslationPrompt(
     .join("\n\n");
 
   return { system, user: lyrics, modules: { base: true, source, secondary, target: target.code } };
+}
+
+/**
+ * Assemble a refiner system prompt from modular fragments.
+ * Uses REFINER_BASE instead of BASE_PROMPT, but keeps source/target modules.
+ */
+export function composeRefinerPrompt(
+  originalLyrics: string,
+  currentTranslation: string,
+  target: SupportedLanguage,
+  langAnalysis?: LanguageAnalysis,
+  multilingualEnabled = true,
+): { system: string; user: string } {
+  const targetFragment = TARGET_FRAGMENTS[target.code] ?? "";
+  const sourceFragments = getSourceFragments(langAnalysis, multilingualEnabled);
+
+  const system = [REFINER_BASE, ...sourceFragments, targetFragment]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const user = `ORIGINAL LYRICS:\n${originalLyrics}\n\nCURRENT TRANSLATION:\n${currentTranslation}`;
+
+  return { system, user };
 }
