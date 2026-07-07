@@ -13,7 +13,7 @@ import { clearAudioState } from "../../session/flows";
 import { SessionData } from "../../session/types";
 import { Env } from "../../env";
 import { analyzeLanguages } from "../../services/translation/language-analyzer";
-import { urlFields, buildEditMenu, resetTranslationState } from "./index";
+import { buildEditMenu, resetTranslationState } from "./index";
 
 export async function handleTrackSelectionCallback(ctx: Context, session: SessionData, env: Env) {
   await safeAnswer(ctx);

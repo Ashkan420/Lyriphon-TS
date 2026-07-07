@@ -7,7 +7,7 @@ import { captureVersion, isStale, SessionMode } from "../../session/index";
 import { SessionData } from "../../session/types";
 import { Env } from "../../env";
 import { searchTracks } from "../../services/deezer";
-import { chatId, tryEditSongPage } from "./index";
+import { chatId } from "./index";
 
 export async function handleAudioDecisionCallback(ctx: Context, session: SessionData, env: Env) {
   const data = ctx.callbackQuery?.data;

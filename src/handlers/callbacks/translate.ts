@@ -21,7 +21,6 @@ import {
   hashString,
   tryEditSongPage,
   resetTranslationState,
-  getDisplayLyrics,
 } from "./index";
 
 export async function handleTranslateCallback(ctx: Context, session: SessionData, env: Env) {
