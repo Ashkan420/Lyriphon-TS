@@ -132,7 +132,7 @@ cp .dev.vars.example .dev.vars
 Then fill in `.dev.vars`:
 
 | Variable | Required | Purpose |
-| --- | --- | --- |
+| :--- | :---: | :--- |
 | `BOT_TOKEN` | ✅ | Telegram bot token from BotFather |
 | `TELEGRAPH_ACCESS_TOKEN` | ✅ | Telegraph page API token |
 | `WEBHOOK_SECRET_TOKEN` | ✅ | Shared secret Telegram sends in `X-Telegram-Bot-Api-Secret-Token` |
@@ -184,7 +184,7 @@ There are two entry points that converge on the same flow:
   /song <query> ─────────────┐
                              ▼
   send audio file ─► Deezer search ─► pick track ─► LRCLIB lyrics ─► Telegraph page
-  (reads tags/filename)                                                  │
+  (reads tags/filename)                                                   │
                               attach "Lyrics" button to the audio ◄───────┘
                                        │
                               send to your channel(s)
