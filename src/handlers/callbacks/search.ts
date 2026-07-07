@@ -1,19 +1,16 @@
 import { Context } from "grammy";
-import { getTrack, getAlbum, searchTracks } from "../../services/deezer";
+import { getTrack, getAlbum } from "../../services/deezer";
 import { getLyrics } from "../../services/lrclib";
 import { createSongTelegraph } from "../../services/telegraph";
 import { getCachedLyrics, cacheLyrics } from "../../db/lyrics";
 import { safeAnswer, safeDelete, attachAudioAndPromptChannel } from "../../utils/telegram";
-import { buildTrackButtons } from "../songSearch";
 import { warn } from "../../utils/logger";
 import {
-  SessionMode,
   captureVersion,
   isStale,
 } from "../../session/index";
 import { clearAudioState } from "../../session/flows";
 import { SessionData } from "../../session/types";
-import { transition } from "../../session/transitions";
 import { Env } from "../../env";
 import { analyzeLanguages } from "../../services/translation/language-analyzer";
 import { urlFields, buildEditMenu, resetTranslationState } from "./index";
