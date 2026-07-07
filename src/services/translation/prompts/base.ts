@@ -10,7 +10,7 @@ STRICT FORMATTING RULES — any violation makes the output invalid:
 1. Output must have exactly the same number of lines as the input.
 2. Preserve line order exactly (line N → line N).
 3. Preserve blank lines in their original positions.
-4. Preserve section labels (e.g. [Verse], [Chorus], [Bridge]) exactly. Do NOT translate or modify them.
+4. Preserve section labels (e.g. [Verse], [Chorus], [Bridge]) exactly. Do NOT translate or modify them. Do NOT create them if they don't exist.
 5. Do not create, remove, or alter section labels. If none exist, none may appear.
 6. Do not merge or split lines.
 7. Do not add or remove any lines.
