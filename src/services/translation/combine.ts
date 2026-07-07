@@ -1,4 +1,4 @@
-import { debug, warn } from "../../utils/logger";
+import { warn } from "../../utils/logger";
 
 const SECTION_LABEL_RE = /^\[.+\]$/;
 
@@ -7,24 +7,42 @@ function isSectionLabel(line: string): boolean {
 }
 
 function normalizeLine(line: string): string {
-  return line.replace(/\u200B/g, "").replace(/\u200C/g, "").trimEnd();
+  return line.replace(/​/g, "").replace(/‌/g, "").trimEnd();
 }
 
 function stripTrailingPunctuation(s: string): string {
   return s.trim().replace(/[.,!?;:'")\]]+$/, "");
 }
 
-export function combineLyricsWithTranslation(
-  originalLyrics: string,
-  translatedLyrics: string,
-): string | null {
+// Pair original lyrics lines with their translations.
+//
+// Aligned path (identical line count, matching section labels, aligned blanks):
+// interleave verbatim — section labels and blanks pass through, and a line whose
+// translation differs from the original is bracketed ([translation]) so it reads
+// as an annotation rather than a duplicate.
+//
+// Misaligned path (Gemini drifted): instead of dropping the whole translation we
+// degrade gracefully and append it as a separate block, so the user still gets it.
+// Returns null ONLY when the translation is empty.
+
+const CRLF = "\r\n";
+
+function fallbackBlock(original: string, translation: string): string {
+  return `${original}\n\n— — —\n\n${translation}`;
+}
+
+export function combineLyricsWithTranslation(originalLyrics: string, translatedLyrics: string): string | null {
+  if (!translatedLyrics || !translatedLyrics.trim()) {
+    return null;
+  }
+
   const originalLines = originalLyrics
-    .replace(/\r\n/g, "\n")
+    .replace(CRLF, "\n")
     .split("\n")
     .map(normalizeLine);
 
   const translatedLines = translatedLyrics
-    .replace(/\r\n/g, "\n")
+    .replace(CRLF, "\n")
     .split("\n")
     .map(normalizeLine);
 
@@ -36,15 +54,11 @@ export function combineLyricsWithTranslation(
   }
 
   if (originalLines.length !== translatedLines.length) {
-    warn("combineLyrics: line count mismatch", {
+    warn("combineLyrics: line count mismatch, attaching translation as separate block", {
       originalCount: originalLines.length,
       translatedCount: translatedLines.length,
     });
-    debug("combineLyrics: line count mismatch detail", {
-      originalLines: originalLines.map((l, i) => `${i}: ${l}`),
-      translatedLines: translatedLines.map((l, i) => `${i}: ${l}`),
-    });
-    return null;
+    return fallbackBlock(originalLyrics, translatedLyrics);
   }
 
   for (let i = 0; i < originalLines.length; i++) {
@@ -53,18 +67,18 @@ export function combineLyricsWithTranslation(
 
     if (isSectionLabel(orig)) {
       if (trans.trim() !== orig.trim()) {
-        warn("combineLyrics: section label mismatch", {
+        warn("combineLyrics: section label mismatch, attaching translation as separate block", {
           line: i,
           original: orig.trim(),
           translated: trans.trim(),
         });
-        return null;
+        return fallbackBlock(originalLyrics, translatedLyrics);
       }
     }
 
     if (orig.trim() === "" && trans.trim() !== "") {
-      warn("combineLyrics: blank line position mismatch", { line: i });
-      return null;
+      warn("combineLyrics: blank line position mismatch, attaching translation as separate block", { line: i });
+      return fallbackBlock(originalLyrics, translatedLyrics);
     }
   }
 

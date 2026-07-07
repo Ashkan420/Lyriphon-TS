@@ -16,8 +16,15 @@ export type GeminiResult =
   | { type: "rate_limited"; retryAfterSeconds: number }
   | { type: "error" };
 
+// Permanent client errors (bad key / bad request / forbidden) fail identically
+// on every model, so there's no point falling through — bail out of the whole
+// loop. Retryable server / quota errors are retried within a model and, if a
+// model is exhausted, fall through to the next one.
+const PERMANENT_STATUS = new Set([400, 401, 403]);
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
 function isRetryable(status: number): boolean {
-  return status === 503;
+  return RETRYABLE_STATUS.has(status);
 }
 
 function parseRetryAfter(body: string): number {
@@ -90,7 +97,20 @@ export async function geminiTranslate(
 
           if (response.status === 429) {
             const retryAfterSeconds = parseRetryAfter(errorText);
-            warn("geminiTranslate:rate_limited", { model, retryAfterSeconds });
+            warn("geminiTranslate:rate_limited", { model, attempt: attempt + 1, retryAfterSeconds });
+            // Retry the SAME model with backoff; only surface rate_limited once
+            // we've exhausted attempts. Permanent client errors (400/401/403)
+            // break out of the loop instead — retrying those is futile.
+            if (attempt < MAX_ATTEMPTS - 1) {
+              const delay = retryAfterSeconds * 1000 + Math.random() * 300;
+              debug("geminiTranslate:retrying_429", {
+                model,
+                attempt: attempt + 1,
+                delayMs: Math.round(delay),
+              });
+              await new Promise((r) => setTimeout(r, delay));
+              continue;
+            }
             return { type: "rate_limited", retryAfterSeconds };
           }
 
