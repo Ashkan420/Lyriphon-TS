@@ -1,7 +1,8 @@
 import { Context } from "grammy";
-import { getTrack, getAlbum } from "../../services/deezer";
+import { getTrack, getAlbum, searchTracks } from "../../services/deezer";
 import { getLyrics } from "../../services/lrclib";
 import { createSongTelegraph } from "../../services/telegraph";
+import { getCachedLyrics, cacheLyrics } from "../../db/lyrics";
 import { safeAnswer, safeDelete, attachAudioAndPromptChannel } from "../../utils/telegram";
 import { buildTrackButtons } from "../songSearch";
 import { warn } from "../../utils/logger";
@@ -56,8 +57,17 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     }
   }
 
-  try { await ctx.editMessageText("⏳ Fetching lyrics..."); } catch {}
-  const lyrics = await getLyrics(trackName, artistName);
+  const cached = await getCachedLyrics(env.DB, trackId);
+  let lyrics: string;
+  if (cached !== null) {
+    lyrics = cached;
+  } else {
+    try { await ctx.editMessageText("⏳ Fetching lyrics..."); } catch {}
+    lyrics = (await getLyrics(trackName, artistName)) ?? "";
+    if (lyrics) {
+      await cacheLyrics(env.DB, trackId, lyrics);
+    }
+  }
   const authorName = ctx.from?.first_name ?? "Unknown User";
 
   try { await ctx.editMessageText("⏳ Creating Telegraph page..."); } catch {}
