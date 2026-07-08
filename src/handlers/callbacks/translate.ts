@@ -289,10 +289,10 @@ async function executeTranslation(
 
   // Retry on empty translation OR line mismatch — only one retry attempt.
   let combined: string | null = null;
-  const result = combineLyricsWithTranslation(snapshotOriginal, rawResult);
-  if (result) {
-    combined = result.combined;
-    if (result.mismatch) {
+  const firstAttempt = combineLyricsWithTranslation(snapshotOriginal, rawResult);
+  if (firstAttempt) {
+    combined = firstAttempt.combined;
+    if (firstAttempt.mismatch) {
       warn("translation line mismatch, retrying", {
         provider: env.TRANSLATION_PROVIDER ?? "gemini",
         lang: langCode,
@@ -302,7 +302,7 @@ async function executeTranslation(
   }
 
   if (!combined) {
-    const reason = result ? "mismatch" : "empty";
+    const reason = firstAttempt ? "mismatch" : "empty";
     warn(`translation ${reason}, retrying`, {
       provider: env.TRANSLATION_PROVIDER ?? "gemini",
       lang: langCode,
@@ -312,9 +312,9 @@ async function executeTranslation(
 
     const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis, multilingualEnabled);
     if (retry.kind === "rate_limited") {
-      // If rate-limited but we had a mismatch fallback, degrade to — — — block
-      if (result?.mismatch) {
-        combined = result.combined;
+      // If rate-limited but first attempt had a fallback, degrade to — — — block
+      if (firstAttempt?.mismatch) {
+        combined = firstAttempt.combined;
       } else {
         session.telegraph.isTranslating = false;
         session.telegraph.translationCooldownUntil = retry.cooldownUntil;
@@ -323,10 +323,13 @@ async function executeTranslation(
       }
     } else if (retry.kind === "text") {
       const retryResult = combineLyricsWithTranslation(snapshotOriginal, retry.text);
-      if (retryResult) {
+      if (retryResult && !retryResult.mismatch) {
+        // Retry aligned — use it
         session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: retry.text };
         combined = retryResult.combined;
-        // If retry also mismatches, accept the fallback (degrade gracefully)
+      } else {
+        // Retry didn't help — fall back to first attempt's result
+        combined = firstAttempt?.combined ?? null;
       }
     }
 
