@@ -154,11 +154,11 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
     const cid = chatId(ctx);
 
     if (cached) {
-      const combined = combineLyricsWithTranslation(originalLyrics, cached.text);
-      if (combined) {
+      const result = combineLyricsWithTranslation(originalLyrics, cached.text);
+      if (result && !result.mismatch) {
         const lastData = session.telegraph.data as any;
         if (lastData) {
-          if (!(await tryEditSongPage(env, lastData, combined, "cached translation"))) {
+          if (!(await tryEditSongPage(env, lastData, result.combined, "cached translation"))) {
             await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Failed to update Telegraph page");
             return;
           }
@@ -168,6 +168,7 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
         session.telegraph.translateMessageId = undefined;
         return;
       }
+      // mismatch or null → fall through to fresh translation
     }
 
     await executeTranslation(ctx, session, env, langCode, pickerMsgId, cid);
@@ -286,11 +287,23 @@ async function executeTranslation(
   }
   session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: rawResult };
 
-  // combineLyricsWithTranslation only returns null for an empty translation
-  // (alignment drift degrades gracefully to a separate block). Retry on that.
-  let combined = combineLyricsWithTranslation(snapshotOriginal, rawResult);
+  // Retry on empty translation OR line mismatch — only one retry attempt.
+  let combined: string | null = null;
+  const result = combineLyricsWithTranslation(snapshotOriginal, rawResult);
+  if (result) {
+    combined = result.combined;
+    if (result.mismatch) {
+      warn("translation line mismatch, retrying", {
+        provider: env.TRANSLATION_PROVIDER ?? "gemini",
+        lang: langCode,
+      });
+      combined = null; // force retry
+    }
+  }
+
   if (!combined) {
-    warn("translation empty, retrying", {
+    const reason = result ? "mismatch" : "empty";
+    warn(`translation ${reason}, retrying`, {
       provider: env.TRANSLATION_PROVIDER ?? "gemini",
       lang: langCode,
     });
@@ -299,17 +312,21 @@ async function executeTranslation(
 
     const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis, multilingualEnabled);
     if (retry.kind === "rate_limited") {
-      session.telegraph.isTranslating = false;
-      session.telegraph.translationCooldownUntil = retry.cooldownUntil;
-      await showRateLimitCooldown(ctx, cid, pickerMsgId, retry.cooldownUntil);
-      return;
-    }
-
-    if (retry.kind === "text") {
-      const retryCombined = combineLyricsWithTranslation(snapshotOriginal, retry.text);
-      if (retryCombined) {
+      // If rate-limited but we had a mismatch fallback, degrade to — — — block
+      if (result?.mismatch) {
+        combined = result.combined;
+      } else {
+        session.telegraph.isTranslating = false;
+        session.telegraph.translationCooldownUntil = retry.cooldownUntil;
+        await showRateLimitCooldown(ctx, cid, pickerMsgId, retry.cooldownUntil);
+        return;
+      }
+    } else if (retry.kind === "text") {
+      const retryResult = combineLyricsWithTranslation(snapshotOriginal, retry.text);
+      if (retryResult) {
         session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: retry.text };
-        combined = retryCombined;
+        combined = retryResult.combined;
+        // If retry also mismatches, accept the fallback (degrade gracefully)
       }
     }
 

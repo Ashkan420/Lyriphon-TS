@@ -60,7 +60,7 @@ export function getDisplayLyrics(session: SessionData): string | null {
     return null;
   }
 
-  return combineLyricsWithTranslation(originalLyrics, entry.text);
+  return combineLyricsWithTranslation(originalLyrics, entry.text)?.combined ?? null;
 }
 
 export function buildEditMenu() {

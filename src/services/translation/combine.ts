@@ -7,7 +7,7 @@ function isSectionLabel(line: string): boolean {
 }
 
 function normalizeLine(line: string): string {
-  return line.replace(/​/g, "").replace(/‌/g, "").trimEnd();
+  return line.replace(/\u200B/g, "").replace(/\u200C/g, "").trimEnd();
 }
 
 function stripTrailingPunctuation(s: string): string {
@@ -25,13 +25,18 @@ function stripTrailingPunctuation(s: string): string {
 // degrade gracefully and append it as a separate block, so the user still gets it.
 // Returns null ONLY when the translation is empty.
 
+export interface CombineResult {
+  combined: string;
+  mismatch: boolean;
+}
+
 const CRLF = "\r\n";
 
 function fallbackBlock(original: string, translation: string): string {
   return `${original}\n\n— — —\n\n${translation}`;
 }
 
-export function combineLyricsWithTranslation(originalLyrics: string, translatedLyrics: string): string | null {
+export function combineLyricsWithTranslation(originalLyrics: string, translatedLyrics: string): CombineResult | null {
   if (!translatedLyrics || !translatedLyrics.trim()) {
     return null;
   }
@@ -58,7 +63,7 @@ export function combineLyricsWithTranslation(originalLyrics: string, translatedL
       originalCount: originalLines.length,
       translatedCount: translatedLines.length,
     });
-    return fallbackBlock(originalLyrics, translatedLyrics);
+    return { combined: fallbackBlock(originalLyrics, translatedLyrics), mismatch: true };
   }
 
   for (let i = 0; i < originalLines.length; i++) {
@@ -72,13 +77,13 @@ export function combineLyricsWithTranslation(originalLyrics: string, translatedL
           original: orig.trim(),
           translated: trans.trim(),
         });
-        return fallbackBlock(originalLyrics, translatedLyrics);
+        return { combined: fallbackBlock(originalLyrics, translatedLyrics), mismatch: true };
       }
     }
 
     if (orig.trim() === "" && trans.trim() !== "") {
       warn("combineLyrics: blank line position mismatch, attaching translation as separate block", { line: i });
-      return fallbackBlock(originalLyrics, translatedLyrics);
+      return { combined: fallbackBlock(originalLyrics, translatedLyrics), mismatch: true };
     }
   }
 
@@ -99,5 +104,5 @@ export function combineLyricsWithTranslation(originalLyrics: string, translatedL
     }
   }
 
-  return parts.join("\n");
+  return { combined: parts.join("\n"), mismatch: false };
 }
