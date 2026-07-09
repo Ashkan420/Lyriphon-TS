@@ -2,7 +2,7 @@ import { Context } from "grammy";
 import type { InlineKeyboardButton } from "@grammyjs/types";
 import { safeAnswer, safeEdit, safeDelete } from "../../utils/telegram";
 import { warn } from "../../utils/logger";
-import { translateLyrics } from "../../services/translation/index";
+import { translateLyrics, TranslationResult } from "../../services/translation/index";
 import {
   isSourceLanguage,
   getLanguageUiLabel,
@@ -13,7 +13,7 @@ import {
   SUPPORTED_LANGUAGES,
   LanguageCode,
 } from "../../services/translation/types";
-import { combineLyricsWithTranslation } from "../../services/translation/combine";
+import { combineLyricsWithTranslation, combineLyricsFromJson, parseTranslationJson } from "../../services/translation/combine";
 import { Env } from "../../env";
 import { SessionData } from "../../session/types";
 import {
@@ -154,21 +154,25 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
     const cid = chatId(ctx);
 
     if (cached) {
-      const result = combineLyricsWithTranslation(originalLyrics, cached.text);
-      if (result && !result.mismatch) {
-        const lastData = session.telegraph.data as any;
-        if (lastData) {
-          if (!(await tryEditSongPage(env, lastData, result.combined, "cached translation"))) {
-            await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Failed to update Telegraph page");
-            return;
+      const originalLineCount = originalLyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
+      const parsedLines = parseTranslationJson(cached.text, originalLineCount);
+      if (parsedLines) {
+        const result = combineLyricsFromJson(originalLyrics, parsedLines.split("\n"));
+        if (result) {
+          const lastData = session.telegraph.data as any;
+          if (lastData) {
+            if (!(await tryEditSongPage(env, lastData, result.combined, "cached translation"))) {
+              await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Failed to update Telegraph page");
+              return;
+            }
           }
+          session.telegraph.activeLang = langCode;
+          await safeEdit(ctx.api, cid!, pickerMsgId!, `✅ ${language.name} lyrics added. `);
+          session.telegraph.translateMessageId = undefined;
+          return;
         }
-        session.telegraph.activeLang = langCode;
-        await safeEdit(ctx.api, cid!, pickerMsgId!, `✅ ${language.name} lyrics added. `);
-        session.telegraph.translateMessageId = undefined;
-        return;
       }
-      // mismatch or null → fall through to fresh translation
+      // parse failed or combine returned null → fall through to fresh translation
     }
 
     await executeTranslation(ctx, session, env, langCode, pickerMsgId, cid);
@@ -192,7 +196,7 @@ async function showRateLimitCooldown(
 
 type TranslateAttempt =
   | { kind: "rate_limited"; cooldownUntil: number }
-  | { kind: "text"; text: string }
+  | { kind: "json"; rawJson: string; lines: string[] }
   | { kind: "fail" };
 
 // One translateLyrics call, normalized. Swallows unexpected throws (returns
@@ -210,7 +214,7 @@ async function runTranslateAttempt(
       return { kind: "rate_limited", cooldownUntil: Date.now() + result.retryAfterSeconds * 1000 };
     }
     if (result.type === "success") {
-      return { kind: "text", text: result.text };
+      return { kind: "json", rawJson: result.rawJson, lines: result.lines };
     }
   } catch (error) {
     warn("translateLyrics threw unexpectedly", error);
@@ -260,7 +264,6 @@ async function executeTranslation(
     await showRateLimitCooldown(ctx, cid, pickerMsgId, attempt.cooldownUntil);
     return;
   }
-  const rawResult: string | null = attempt.kind === "text" ? attempt.text : null;
 
   if (session.telegraph.translationRequestId !== requestId) {
     resetTranslationState(session);
@@ -273,11 +276,13 @@ async function executeTranslation(
     return;
   }
 
-  if (!rawResult) {
+  if (attempt.kind !== "json") {
     resetTranslationState(session);
     await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Translation failed. try again later.");
     return;
   }
+
+  const { rawJson, lines } = attempt;
 
   const originalHash = hashString(originalLyrics);
   const cacheKey = `${langCode}:${originalHash}`;
@@ -285,25 +290,27 @@ async function executeTranslation(
   if (!session.telegraph.translatedLyrics) {
     session.telegraph.translatedLyrics = {};
   }
-  session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: rawResult };
+  // Cache the raw JSON so we can re-parse on cache hits
+  session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: rawJson };
 
-  // Retry on empty translation OR line mismatch — only one retry attempt.
-  let combined: string | null = null;
-  const firstAttempt = combineLyricsWithTranslation(snapshotOriginal, rawResult);
-  if (firstAttempt) {
-    combined = firstAttempt.combined;
-    if (firstAttempt.mismatch) {
-      warn("translation line mismatch, retrying", {
-        provider: env.TRANSLATION_PROVIDER ?? "gemini",
-        lang: langCode,
-      });
-      combined = null; // force retry
+  // JSON output guarantees correct line count — combine directly
+  const combinedResult = combineLyricsFromJson(snapshotOriginal, lines);
+
+  let combined: string | null = combinedResult?.combined ?? null;
+
+  if (!combined) {
+    // Fallback: try text-based combine on the joined lines (shouldn't happen
+    // if JSON was valid, but defensive)
+    warn("combineLyricsFromJson returned null, trying text fallback");
+    const textFallback = combineLyricsWithTranslation(snapshotOriginal, lines.join("\n"));
+    if (textFallback && !textFallback.mismatch) {
+      combined = textFallback.combined;
     }
   }
 
   if (!combined) {
-    const reason = firstAttempt ? "mismatch" : "empty";
-    warn(`translation ${reason}, retrying`, {
+    // Last resort: retry once
+    warn("translation combine failed, retrying", {
       provider: env.TRANSLATION_PROVIDER ?? "gemini",
       lang: langCode,
     });
@@ -312,31 +319,23 @@ async function executeTranslation(
 
     const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis, multilingualEnabled);
     if (retry.kind === "rate_limited") {
-      // If rate-limited but first attempt had a fallback, degrade to — — — block
-      if (firstAttempt?.mismatch) {
-        combined = firstAttempt.combined;
-      } else {
-        session.telegraph.isTranslating = false;
-        session.telegraph.translationCooldownUntil = retry.cooldownUntil;
-        await showRateLimitCooldown(ctx, cid, pickerMsgId, retry.cooldownUntil);
-        return;
-      }
-    } else if (retry.kind === "text") {
-      const retryResult = combineLyricsWithTranslation(snapshotOriginal, retry.text);
-      if (retryResult && !retryResult.mismatch) {
-        // Retry aligned — use it
-        session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: retry.text };
-        combined = retryResult.combined;
-      } else {
-        // Retry didn't help — fall back to first attempt's result
-        combined = firstAttempt?.combined ?? null;
+      session.telegraph.isTranslating = false;
+      session.telegraph.translationCooldownUntil = retry.cooldownUntil;
+      await showRateLimitCooldown(ctx, cid, pickerMsgId, retry.cooldownUntil);
+      return;
+    }
+    if (retry.kind === "json") {
+      const retryCombined = combineLyricsFromJson(snapshotOriginal, retry.lines);
+      if (retryCombined) {
+        session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: retry.rawJson };
+        combined = retryCombined.combined;
       }
     }
 
     if (!combined) {
       delete session.telegraph.translatedLyrics[cacheKey];
       resetTranslationState(session);
-      warn("translation retry also failed to produce matching line count");
+      warn("translation retry also failed to produce valid output");
       await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Translation format error — try again");
       return;
     }

@@ -1,6 +1,6 @@
 import { Context } from "grammy";
 import { editSongPage } from "../../services/telegraph";
-import { combineLyricsWithTranslation } from "../../services/translation/combine";
+import { combineLyricsWithTranslation, combineLyricsFromJson, parseTranslationJson } from "../../services/translation/combine";
 import { warn } from "../../utils/logger";
 import { SessionData } from "../../session/types";
 import { Env } from "../../env";
@@ -60,6 +60,14 @@ export function getDisplayLyrics(session: SessionData): string | null {
     return null;
   }
 
+  // Cache stores raw JSON from Gemini — parse and combine
+  const originalLineCount = originalLyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
+  const parsedLines = parseTranslationJson(entry.text, originalLineCount);
+  if (parsedLines) {
+    return combineLyricsFromJson(originalLyrics, parsedLines.split("\n"))?.combined ?? null;
+  }
+
+  // Fallback: try text-based combine (handles legacy plain-text cache entries)
   return combineLyricsWithTranslation(originalLyrics, entry.text)?.combined ?? null;
 }
 

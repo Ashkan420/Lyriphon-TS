@@ -1,5 +1,134 @@
 import { describe, expect, it } from "vitest";
-import { combineLyricsWithTranslation } from "../src/services/translation/combine";
+import { combineLyricsWithTranslation, parseTranslationJson, combineLyricsFromJson } from "../src/services/translation/combine";
+
+describe("parseTranslationJson", () => {
+  it("parses valid JSON with correct line count", () => {
+    const json = JSON.stringify({ lines: [{ n: 1, t: "hello" }, { n: 2, t: "world" }] });
+    const result = parseTranslationJson(json, 2);
+    expect(result).toBe("hello\nworld");
+  });
+
+  it("strips markdown code fences", () => {
+    const json = "```json\n" + JSON.stringify({ lines: [{ n: 1, t: "hi" }] }) + "\n```";
+    const result = parseTranslationJson(json, 1);
+    expect(result).toBe("hi");
+  });
+
+  it("strips plain code fences", () => {
+    const json = "```\n" + JSON.stringify({ lines: [{ n: 1, t: "hi" }] }) + "\n```";
+    const result = parseTranslationJson(json, 1);
+    expect(result).toBe("hi");
+  });
+
+  it("returns null for invalid JSON", () => {
+    const result = parseTranslationJson("not json", 1);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when line count mismatches", () => {
+    const json = JSON.stringify({ lines: [{ n: 1, t: "a" }, { n: 2, t: "b" }] });
+    const result = parseTranslationJson(json, 3);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when lines array is empty", () => {
+    const json = JSON.stringify({ lines: [] });
+    const result = parseTranslationJson(json, 0);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when lines key is missing", () => {
+    const result = parseTranslationJson(JSON.stringify({ foo: "bar" }), 1);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when line numbers are out of order", () => {
+    const json = JSON.stringify({ lines: [{ n: 2, t: "b" }, { n: 1, t: "a" }] });
+    const result = parseTranslationJson(json, 2);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when entry has invalid t type", () => {
+    const json = JSON.stringify({ lines: [{ n: 1, t: 123 }] });
+    const result = parseTranslationJson(json, 1);
+    expect(result).toBeNull();
+  });
+
+  it("handles blank lines as empty t values", () => {
+    const json = JSON.stringify({ lines: [{ n: 1, t: "hello" }, { n: 2, t: "" }, { n: 3, t: "world" }] });
+    const result = parseTranslationJson(json, 3);
+    expect(result).toBe("hello\n\nworld");
+  });
+
+  it("handles section labels preserved as-is", () => {
+    const json = JSON.stringify({
+      lines: [
+        { n: 1, t: "[Verse 1]" },
+        { n: 2, t: "سلام دنیا" },
+        { n: 3, t: "[Chorus]" },
+        { n: 4, t: "خداحافظ" },
+      ],
+    });
+    const result = parseTranslationJson(json, 4);
+    expect(result).toBe("[Verse 1]\nسلام دنیا\n[Chorus]\nخداحافظ");
+  });
+});
+
+describe("combineLyricsFromJson", () => {
+  it("interleaves JSON-parsed translation lines", () => {
+    const original = "line one\nline two\nline three";
+    const lines = ["خط یک", "خط دو", "خط سه"];
+    const result = combineLyricsFromJson(original, lines);
+    expect(result?.combined).toBe("line one\n[خط یک]\nline two\n[خط دو]\nline three\n[خط سه]");
+    expect(result?.mismatch).toBe(false);
+  });
+
+  it("passes section labels through verbatim", () => {
+    const original = "[Verse 1]\nhello world\n[Chorus]\ngoodbye";
+    const lines = ["[Verse 1]", "سلام دنیا", "[Chorus]", "خداحافظ"];
+    const result = combineLyricsFromJson(original, lines);
+    expect(result?.combined).toBe(
+      "[Verse 1]\nhello world\n[سلام دنیا]\n[Chorus]\ngoodbye\n[خداحافظ]",
+    );
+    expect(result?.mismatch).toBe(false);
+  });
+
+  it("preserves blank lines that align", () => {
+    const original = "verse one\n\nverse two";
+    const lines = ["بند یک", "", "بند دو"];
+    const result = combineLyricsFromJson(original, lines);
+    expect(result?.combined).toBe("verse one\n[بند یک]\n\nverse two\n[بند دو]");
+    expect(result?.mismatch).toBe(false);
+  });
+
+  it("does not duplicate a line whose translation matches after punctuation stripping", () => {
+    const original = "hold on.\nlet me go";
+    const lines = ["hold on", "let me go"];
+    const result = combineLyricsFromJson(original, lines);
+    expect(result?.combined).toBe("hold on.\nlet me go");
+    expect(result?.mismatch).toBe(false);
+  });
+
+  it("returns null for empty lines array", () => {
+    const result = combineLyricsFromJson("hello", []);
+    expect(result).toBeNull();
+  });
+
+  it("trims trailing blank lines from original before combining", () => {
+    const original = "line one\nline two\n\n";
+    const lines = ["خط یک", "خط دو"];
+    const result = combineLyricsFromJson(original, lines);
+    expect(result?.combined).toBe("line one\n[خط یک]\nline two\n[خط دو]");
+    expect(result?.mismatch).toBe(false);
+  });
+
+  it("always returns mismatch: false since JSON guarantees alignment", () => {
+    const original = "a\nb\nc";
+    const lines = ["x", "y", "z"];
+    const result = combineLyricsFromJson(original, lines);
+    expect(result?.mismatch).toBe(false);
+  });
+});
 
 describe("combineLyricsWithTranslation", () => {
   it("interleaves translation as [bracketed] lines under each original", () => {

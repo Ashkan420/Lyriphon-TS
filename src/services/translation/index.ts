@@ -4,8 +4,20 @@ import { composeTranslationPrompt } from "./prompts";
 import { findLanguage, LanguageCode } from "./types";
 import { warn } from "../../utils/logger";
 import { LanguageAnalysis } from "./language-analyzer";
+import { parseTranslationJson } from "./combine";
 
 export type { GeminiResult };
+
+export type TranslationResult = {
+  type: "success";
+  rawJson: string;
+  lines: string[];
+} | {
+  type: "rate_limited";
+  retryAfterSeconds: number;
+} | {
+  type: "error";
+}
 
 export async function translateLyrics(
   env: Env,
@@ -13,7 +25,7 @@ export async function translateLyrics(
   targetLangCode: LanguageCode,
   langAnalysis?: LanguageAnalysis,
   multilingualEnabled = true,
-): Promise<GeminiResult> {
+): Promise<TranslationResult> {
   if (!lyrics?.trim()) {
     return { type: "error" };
   }
@@ -34,7 +46,28 @@ export async function translateLyrics(
   const provider = env.TRANSLATION_PROVIDER ?? "gemini";
 
   if (provider === "gemini") {
-    return await geminiTranslate(env, prompt.system, prompt.user, prompt.modules);
+    const geminiResult = await geminiTranslate(env, prompt.system, prompt.user, prompt.modules);
+
+    if (geminiResult.type !== "success") {
+      return geminiResult;
+    }
+
+    const originalLineCount = lyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
+    const parsedLines = parseTranslationJson(geminiResult.text, originalLineCount);
+
+    if (!parsedLines) {
+      warn("translateLyrics: failed to parse JSON translation", {
+        lineCount: originalLineCount,
+        snippet: geminiResult.text.slice(0, 200),
+      });
+      return { type: "error" };
+    }
+
+    return {
+      type: "success",
+      rawJson: geminiResult.text,
+      lines: parsedLines.split("\n"),
+    };
   }
 
   warn("translateLyrics: unknown provider", provider);
