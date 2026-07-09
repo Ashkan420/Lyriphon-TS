@@ -19,12 +19,19 @@ export type TranslationResult = {
   type: "error";
 }
 
+const RETRY_HINT = `\n\n⚠️ CRITICAL RETRY INSTRUCTION — YOU FAILED THIS BEFORE:
+Your previous attempt had the WRONG number of lines in the output array.
+The input has exactly N lines. Your JSON array MUST have exactly N elements.
+Count your output carefully before responding. If unsure, re-count.
+Line count mismatch is the ONLY reason this retry was triggered.`;
+
 export async function translateLyrics(
   env: Env,
   lyrics: string,
   targetLangCode: LanguageCode,
   langAnalysis?: LanguageAnalysis,
   multilingualEnabled = true,
+  retryHint = false,
 ): Promise<TranslationResult> {
   if (!lyrics?.trim()) {
     return { type: "error" };
@@ -42,6 +49,11 @@ export async function translateLyrics(
   }
 
   const prompt = composeTranslationPrompt(lyrics, language, langAnalysis, multilingualEnabled);
+
+  if (retryHint) {
+    const lineCount = lyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
+    prompt.system += RETRY_HINT.replace(/N/g, String(lineCount));
+  }
 
   const provider = env.TRANSLATION_PROVIDER ?? "gemini";
 
