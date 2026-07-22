@@ -4,7 +4,7 @@ export const DEFAULT_WEBHOOK_PATH = "webhook";
 
 // HTTP resilience
 export const HTTP_TIMEOUT_MS = 8000;
-export const DEEZER_MAX_RETRIES = 2;       // total attempts = retries + 1
+export const DEEZER_MAX_RETRIES = 4;       // total attempts = retries + 1
 export const LRCLIB_TIMEOUT_MS = 8000;
 export const LRCLIB_MAX_RETRIES = 1;       // 2 attempts max when flaky, not endless
 
