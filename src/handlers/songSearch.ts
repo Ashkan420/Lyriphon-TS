@@ -30,13 +30,26 @@ export function buildTrackButtons(results: any[], page = 0) {
     ]);
   }
 
+  const totalPages = Math.ceil(results.length / PAGE_SIZE);
   const navButtons: InlineKeyboardButton[] = [];
-  if (page > 0) {
-    navButtons.push({ text: "⬅️ Previous", callback_data: `search_page_${page - 1}` });
+
+  if (totalPages > 1) {
+    // Add Previous button for all pages except first
+    if (page > 0) {
+      navButtons.push({ text: "⬅️ Previous", callback_data: `search_page_${page - 1}` });
+    }
+
+    // Add Next button for all pages except last
+    if (page < totalPages - 1) {
+      navButtons.push({ text: "Next ➡️", callback_data: `search_page_${page + 1}` });
+    }
+
+    // Add First button only on last page when 3+ pages
+    if (page === totalPages - 1 && totalPages > 2) {
+      navButtons.push({ text: "⏮️ First", callback_data: "search_page_0" });
+    }
   }
-  if (results.length > start + PAGE_SIZE) {
-    navButtons.push({ text: "Next ➡️", callback_data: `search_page_${page + 1}` });
-  }
+
   if (navButtons.length) {
     buttons.push(navButtons);
   }

@@ -8,8 +8,8 @@ export async function handleLogsRefreshCallback(ctx: Context) {
   await ctx.editMessageText(text, {
     reply_markup: {
       inline_keyboard: [
-        [{ text: "🔄 Refresh", callback_data: "logs_refresh" }],
-        [{ text: "❌ Close", callback_data: "logs_close" }],
+        [{ text: "Refresh", callback_data: "logs_refresh", style: "primary" as const }],
+        [{ text: "Close", callback_data: "logs_close", style: "danger" as const }],
       ],
     },
   });
