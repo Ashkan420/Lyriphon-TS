@@ -28,7 +28,7 @@ export async function handleEditFieldCallback(ctx: Context, session: SessionData
   let text = "";
   let markup: { inline_keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>> };
 
-  const cancelButton = [[{ text: "❌ Cancel", callback_data: "cancel_edit" }]];
+  const cancelButton = [[{ text: "Cancel", callback_data: "cancel_edit", style: "danger" as const }]];
 
   if (urlFields.includes(field)) {
     text = `✏️ Send new URL for: ${field}\n\n• Must start with http:// or https://\n• Type 'none' to remove it`;
@@ -74,8 +74,8 @@ export async function handleNewFieldValue(ctx: Context, session: SessionData, en
     }
 
     const doneCancelButtons = [
-      [{ text: "✅ Done", callback_data: "done_lyrics" }],
-      [{ text: "❌ Cancel", callback_data: "cancel_edit" }],
+      [{ text: "✅ Done", callback_data: "done_lyrics", style: "success" as const }],
+      [{ text: "❌ Cancel", callback_data: "cancel_edit", style: "danger" as const }],
     ];
 
     const prompt = await ctx.reply("✏️ Send more lyrics, or click Done when finished", {
