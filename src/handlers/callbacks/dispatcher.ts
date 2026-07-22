@@ -10,6 +10,7 @@ import {
   handleDoneLyricsCallback,
   handleNewFieldValue,
 } from "./edit";
+import { handleExpandEditMenu } from "./index";
 import { handleTranslateCallback } from "./translate";
 import { handleLogsRefreshCallback, handleLogsCloseCallback } from "./logs";
 
@@ -64,6 +65,11 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
 
   if (data === "logs_close") {
     await handleLogsCloseCallback(ctx);
+    return;
+  }
+
+  if (data === "expand_edit_menu") {
+    await handleExpandEditMenu(ctx);
     return;
   }
 }

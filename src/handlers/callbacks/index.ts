@@ -1,5 +1,6 @@
 import { Context } from "grammy";
 import { editSongPage } from "../../services/telegraph";
+import { safeAnswer } from "../../utils/telegram";
 import { combineLyricsWithTranslation, combineLyricsFromJson, parseTranslationJson } from "../../services/translation/combine";
 import { warn } from "../../utils/logger";
 import { SessionData } from "../../session/types";
@@ -71,7 +72,14 @@ export function getDisplayLyrics(session: SessionData): string | null {
   return combineLyricsWithTranslation(originalLyrics, entry.text)?.combined ?? null;
 }
 
-export function buildEditMenu() {
+export function buildEditMenu(expanded = false) {
+  if (!expanded) {
+    return [
+      [{ text: "✏️ Edit Telegraph", callback_data: "expand_edit_menu" }],
+      [{ text: "🌐 Translate Lyrics", callback_data: "translate:open" }],
+    ];
+  }
+
   return [
     [
       { text: "✏️ Lyrics", callback_data: "edit_field_lyrics" },
@@ -97,6 +105,15 @@ export function buildEditMenu() {
       { text: "🌐 Translate Lyrics", callback_data: "translate:open" },
     ],
   ];
+}
+
+export async function handleExpandEditMenu(ctx: Context) {
+  await safeAnswer(ctx);
+  try {
+    await ctx.editMessageReplyMarkup({
+      reply_markup: { inline_keyboard: buildEditMenu(true) },
+    });
+  } catch {}
 }
 
 export { handleCallbackQuery, processTextMessage } from "./dispatcher";
