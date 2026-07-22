@@ -8,8 +8,9 @@ const DEEZER_TRACK_URL = "https://api.deezer.com/track/";
 const DEEZER_ALBUM_URL = "https://api.deezer.com/album/";
 
 const DEEZER_HEADERS = {
-  "User-Agent": "LyriphonBot/1.0 (+https://t.me/lyriphon_bot; Cloudflare Workers)",
+  "User-Agent": "Mozilla/5.0 (compatible; LyriphonBot/1.0; +https://t.me/lyriphon_bot)",
   "Accept": "application/json",
+  "Accept-Language": "en-US,en;q=0.9",
 };
 
 // HTTP status codes that should trigger a retry
@@ -41,12 +42,16 @@ async function deezerFetchJson(url: string, label: string): Promise<any | null> 
       });
       
       if (!response.ok) {
+        let body = "";
+        try {
+          body = await response.text();
+        } catch {}
         // Retry on retryable status codes
         if (RETRYABLE_STATUSES.has(response.status)) {
-          throw new Error(`Deezer ${label} retryable HTTP error ${response.status}`);
+          throw new Error(`Deezer ${label} retryable HTTP error ${response.status}: ${body}`);
         }
         // No retry for other errors (404, 400, etc.)
-        warn(`Deezer ${label} HTTP error`, response.status, url);
+        warn(`Deezer ${label} HTTP error`, response.status, url, body);
         return null;
       }
       
