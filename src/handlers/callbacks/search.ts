@@ -14,6 +14,7 @@ import { SessionData } from "../../session/types";
 import { Env } from "../../env";
 import { analyzeLanguages } from "../../services/translation/language-analyzer";
 import { buildEditMenu, resetTranslationState } from "./index";
+import { MESSAGE_EFFECT_CONFETTI } from "../../config";
 
 export async function handleTrackSelectionCallback(ctx: Context, session: SessionData, env: Env) {
   await safeAnswer(ctx);
@@ -105,6 +106,64 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
 
   const pendingAudioFileId = session.audio.fileId;
   const hasAudio = Boolean(pendingAudioFileId);
+
+  const status = hasAudio ? "Telegraph Created & Audio Attached" : "Telegraph Created";
+  const extra = hasAudio ? "" : "Send a music file to attach the Lyrics button to it.\n\n";
+
+  const replyText = `✅ <b>${status}</b>\n\n<blockquote>🎵 <b>${(trackName)}</b>\n👤 ${(artistName)}\n💽 ${(albumName)}\n📅 ${(releaseDate)}</blockquote>\n\n${extra}👇 Edit options below — or tap to open the page:\n<a href="${telegraphResult.url}">📖 Open Telegraph Page</a>`;
+
+  const chatId = ctx.chat?.id;
+  if (!chatId) {
+    // Fallback to edit if no chat id
+    try {
+      await ctx.editMessageText(replyText, {
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: buildEditMenu() },
+      });
+    } catch (error) {
+      warn("Failed to edit message with final result", error);
+    }
+    return;
+  }
+
+  // Try to send new message with confetti effect
+  try {
+    await ctx.api.sendMessage(chatId, replyText, {
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: buildEditMenu() },
+      message_effect_id: MESSAGE_EFFECT_CONFETTI,
+    });
+    // Delete the progress message on success
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    if (messageId) {
+      await safeDelete(ctx.api, chatId, messageId);
+    }
+  } catch (error) {
+    // Confetti effect might fail (non-private chat or API rejection)
+    // Fall back to sending without effect
+    try {
+      await ctx.api.sendMessage(chatId, replyText, {
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: buildEditMenu() },
+      });
+      const messageId = ctx.callbackQuery?.message?.message_id;
+      if (messageId) {
+        await safeDelete(ctx.api, chatId, messageId);
+      }
+    } catch (fallbackError) {
+      // If send fails too, try to edit the existing message
+      try {
+        await ctx.editMessageText(replyText, {
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: buildEditMenu() },
+        });
+      } catch (editError) {
+        warn("Failed to send or edit final result", editError);
+      }
+    }
+  }
+
+  // Attach audio and prompt channel AFTER sending Telegraph result
   if (hasAudio && pendingAudioFileId) {
     const caption = await attachAudioAndPromptChannel(
       ctx.api,
@@ -119,7 +178,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     );
 
     if (!caption) {
-      await ctx.editMessageText("❌ Failed to attach audio. Try again.");
+      // Audio failed but Telegraph was already sent, don't error out
       session.audio.fileId = undefined;
       return;
     }
@@ -130,19 +189,5 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
 
     clearAudioState(session);
     session.telegraph.url = undefined;
-  }
-
-  const status = hasAudio ? "Telegraph Created & Audio Attached" : "Telegraph Created";
-  const extra = hasAudio ? "" : "Send a music file to attach the Lyrics button to it.\n\n";
-
-  const replyText = `✅ <b>${status}</b>\n\n<blockquote>🎵 <b>${(trackName)}</b>\n👤 ${(artistName)}\n💽 ${(albumName)}\n📅 ${(releaseDate)}</blockquote>\n\n${extra}👇 Edit options below — or tap to open the page:\n<a href="${telegraphResult.url}">📖 Open Telegraph Page</a>`;
-
-  try {
-    await ctx.editMessageText(replyText, {
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: buildEditMenu() },
-    });
-  } catch (error) {
-    warn("Failed to edit message with final result", error);
   }
 }

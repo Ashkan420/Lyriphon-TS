@@ -12,7 +12,7 @@ import { SessionMode } from "./session/types";
 import { inMode } from "./session/transitions";
 import { safeDelete, cancelEdit } from "./utils/telegram";
 import { clearAudioState } from "./session/flows";
-import { warn } from "./utils/logger";
+import { warn, formatLogsForTelegram } from "./utils/logger";
 
 export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
   const bot = new Bot<Context>(env.BOT_TOKEN);
@@ -82,6 +82,21 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
       : !sessionDo.debugEnabled;
     await sessionDo.setDebugEnabled(enabled);
     await ctx.reply(`Debug logging ${enabled ? "enabled" : "disabled"}.`);
+  });
+
+  bot.command("logs", async (ctx) => {
+    if (env.BOT_OWNER_ID && String(ctx.from?.id) !== env.BOT_OWNER_ID) {
+      return;
+    }
+    const text = formatLogsForTelegram();
+    await ctx.reply(text, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔄 Refresh", callback_data: "logs_refresh" }],
+          [{ text: "❌ Close", callback_data: "logs_close" }],
+        ],
+      },
+    });
   });
 
   bot.command("multilingual", async (ctx) => {

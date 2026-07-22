@@ -11,6 +11,7 @@ import {
   handleNewFieldValue,
 } from "./edit";
 import { handleTranslateCallback } from "./translate";
+import { handleLogsRefreshCallback, handleLogsCloseCallback } from "./logs";
 
 // Single stable entry point. `bot.ts` imports handleCallbackQuery /
 // processTextMessage from "../handlers/callbacks" — that barrel re-exports this,
@@ -53,6 +54,16 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
 
   if (data.startsWith("translate:")) {
     await handleTranslateCallback(ctx, session, env);
+    return;
+  }
+
+  if (data === "logs_refresh") {
+    await handleLogsRefreshCallback(ctx);
+    return;
+  }
+
+  if (data === "logs_close") {
+    await handleLogsCloseCallback(ctx);
     return;
   }
 }
