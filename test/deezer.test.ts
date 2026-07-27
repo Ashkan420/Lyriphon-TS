@@ -19,15 +19,18 @@ describe("deezer service", () => {
     expect(result).toEqual([{ id: 1 }, { id: 2 }]);
   });
 
+  // Full Deezer retry budget (5 retries + exponential backoff) exceeds the
+  // default 5s vitest timeout — give these room so they finish cleanly and
+  // don't leave in-flight retries that pollute later mocks.
   it("searchTracks returns null on HTTP error", async () => {
     mockFetch(() => new Response("nope", { status: 500 }));
     expect(await searchTracks("query")).toBeNull();
-  });
+  }, 30_000);
 
   it("searchTracks returns null when fetch throws", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("network"))));
     expect(await searchTracks("query")).toBeNull();
-  });
+  }, 30_000);
 
   it("getTrack returns parsed JSON on success", async () => {
     mockFetch(() => new Response(JSON.stringify({ id: 42, title: "x" }), { status: 200 }));
@@ -42,7 +45,7 @@ describe("deezer service", () => {
   it("getAlbum returns null when fetch throws", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("network"))));
     expect(await getAlbum(7)).toBeNull();
-  });
+  }, 30_000);
 
   it("searchTracks retries on 403 and succeeds", async () => {
     let callCount = 0;
@@ -56,7 +59,7 @@ describe("deezer service", () => {
     const result = await searchTracks("query");
     expect(result).toEqual([{ id: 1 }]);
     expect(callCount).toBe(2);
-  });
+  }, 15_000);
 
   it("searchTracks does not retry on 404", async () => {
     let callCount = 0;
@@ -102,7 +105,7 @@ describe("deezer service", () => {
     const result = await searchTracks("query");
     expect(result).toEqual([{ id: 1 }]);
     expect(callCount).toBe(2);
-  });
+  }, 15_000);
 
   it("searchTracks returns null on Deezer JSON error 4", async () => {
     mockFetch(() => new Response(JSON.stringify({

@@ -7,6 +7,7 @@ import { SessionData, SessionMode } from "../session/types";
 import { clearAudioState } from "../session/flows";
 import { inMode } from "../session/transitions";
 import { searchAndShowResults, safeAnswer, formatDuration, clearSendChannelPrompt } from "../utils/telegram";
+import { log } from "../utils/logger";
 
 const PAGE_SIZE = 5;
 
@@ -73,17 +74,23 @@ export async function songSearchCommand(ctx: Context, session: SessionData, env:
     return;
   }
 
+  log("/song query:", JSON.stringify(query));
+
   // Farsi titles don't match Deezer's Latin-script index. Transliterate to
   // Finglish and search with that, falling back to the original on no results.
   let searchQuery = query;
   let displayLabel = query;
   let fallbackQuery: string | undefined;
   if (containsFarsi(query)) {
+    log("/song: Farsi detected, transliterating to Finglish");
     const finglish = await transliterateFarsi(env, query);
     if (finglish) {
       searchQuery = finglish;
       displayLabel = `${query} → ${finglish}`;
       fallbackQuery = query;
+      log("/song: Finglish", JSON.stringify(finglish), "(fallback = original)");
+    } else {
+      log("/song: Finglish transliteration failed, searching original");
     }
   }
 

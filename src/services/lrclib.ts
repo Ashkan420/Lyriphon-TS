@@ -1,11 +1,13 @@
 import { LRCLIB_TIMEOUT_MS, LRCLIB_MAX_RETRIES } from "../config";
 import { retryAsync } from "../utils/retry";
 import { fetchWithTimeout } from "../utils/fetch";
-import { warn } from "../utils/logger";
+import { log, previewText, warn } from "../utils/logger";
 
 const LRCLIB_SEARCH = "https://lrclib.net/api/search";
 
 export async function getLyrics(track: string, artist: string, retries = LRCLIB_MAX_RETRIES, delay = 0.4) {
+  log("LRCLIB search:", JSON.stringify({ track, artist }));
+
   async function fetchLyrics() {
     const url = new URL(LRCLIB_SEARCH);
     url.searchParams.set("track_name", track);
@@ -29,11 +31,41 @@ export async function getLyrics(track: string, artist: string, retries = LRCLIB_
     }
 
     const results = await response.json();
-    const best = Array.isArray(results) && results[0];
-    const lyrics = best?.plainLyrics ?? best?.syncedLyrics;
-    if (!lyrics) {
+    if (!Array.isArray(results) || results.length === 0) {
+      log("LRCLIB: no results for", JSON.stringify({ track, artist }));
       return null;
     }
+
+    const best = results[0];
+    const source = best?.plainLyrics ? "plain" : best?.syncedLyrics ? "synced" : null;
+    const lyrics = best?.plainLyrics ?? best?.syncedLyrics;
+    if (!lyrics) {
+      const topHits = results
+        .slice(0, 3)
+        .map((r: any) => `"${r?.trackName ?? "?"}" / "${r?.artistName ?? "?"}"`)
+        .join("; ");
+      log(
+        "LRCLIB: results without lyrics text",
+        JSON.stringify({ track, artist, count: results.length, topHits }),
+      );
+      return null;
+    }
+
+    log(
+      "LRCLIB: found",
+      source,
+      `lyrics (${results.length} hit(s)) matched`,
+      JSON.stringify({
+        requested: { track, artist },
+        matched: {
+          track: best?.trackName ?? "?",
+          artist: best?.artistName ?? "?",
+          album: best?.albumName ?? "?",
+        },
+      }),
+      "preview:",
+      previewText(String(lyrics)),
+    );
     return lyrics;
   }
 

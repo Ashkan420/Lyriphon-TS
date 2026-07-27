@@ -1,5 +1,5 @@
 import { DEEZER_MAX_RETRIES, HTTP_TIMEOUT_MS } from "../config";
-import { warn } from "../utils/logger";
+import { log, warn } from "../utils/logger";
 import { retryAsync } from "../utils/retry";
 import { fetchWithTimeout } from "../utils/fetch";
 
@@ -86,20 +86,51 @@ async function deezerFetchJson(url: string, label: string): Promise<any | null> 
 }
 
 export async function searchTracks(query: string, limit = 25) {
+  log("Deezer search:", JSON.stringify(query), `limit=${limit}`);
   const data = await deezerFetchJson(
     `${DEEZER_SEARCH_URL}?q=${encodeURIComponent(query)}`,
     "search",
   );
   if (!data) {
+    log("Deezer search failed (null response) for:", JSON.stringify(query));
     return null;
   }
-  return (data.data ?? []).slice(0, limit);
+  const results = (data.data ?? []).slice(0, limit);
+  if (!results.length) {
+    log("Deezer search: 0 results for:", JSON.stringify(query));
+  } else {
+    const top = results
+      .slice(0, 5)
+      .map((t: any) => `${t?.title ?? "?"} — ${t?.artist?.name ?? "?"}`)
+      .join("; ");
+    const extra = results.length > 5 ? ` (+${results.length - 5} more)` : "";
+    log(`Deezer search: ${results.length} result(s) for`, JSON.stringify(query), `→ ${top}${extra}`);
+  }
+  return results;
 }
 
 export async function getTrack(trackId: number) {
-  return await deezerFetchJson(`${DEEZER_TRACK_URL}${trackId}`, "getTrack");
+  log("Deezer getTrack:", trackId);
+  const track = await deezerFetchJson(`${DEEZER_TRACK_URL}${trackId}`, "getTrack");
+  if (!track) {
+    log("Deezer getTrack failed:", trackId);
+  } else {
+    log(
+      "Deezer getTrack ok:",
+      trackId,
+      `→ "${track.title ?? "?"}" by ${track.artist?.name ?? "?"} (album: ${track.album?.title ?? "?"})`,
+    );
+  }
+  return track;
 }
 
 export async function getAlbum(albumId: number) {
-  return await deezerFetchJson(`${DEEZER_ALBUM_URL}${albumId}`, "getAlbum");
+  log("Deezer getAlbum:", albumId);
+  const album = await deezerFetchJson(`${DEEZER_ALBUM_URL}${albumId}`, "getAlbum");
+  if (!album) {
+    log("Deezer getAlbum failed:", albumId);
+  } else {
+    log("Deezer getAlbum ok:", albumId, `→ "${album.title ?? "?"}" release=${album.release_date ?? "?"}`);
+  }
+  return album;
 }

@@ -4,7 +4,7 @@ import { getLyrics } from "../../services/lrclib";
 import { createSongTelegraph } from "../../services/telegraph";
 import { getCachedLyrics, cacheLyrics } from "../../db/lyrics";
 import { safeAnswer, safeDelete, attachAudioAndPromptChannel } from "../../utils/telegram";
-import { warn } from "../../utils/logger";
+import { log, previewText, warn } from "../../utils/logger";
 import {
   captureVersion,
   isStale,
@@ -29,12 +29,14 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     return;
   }
 
+  log("track selected:", trackId);
   session.search.results = undefined;
   session.search.page = 0;
 
   try { await ctx.editMessageText("⏳ Fetching track info..."); } catch { return; }
   const trackData = await getTrack(trackId) as any;
   if (!trackData) {
+    log("track pipeline: failed to fetch Deezer track", trackId);
     try { await ctx.editMessageText("❌ Failed to fetch track info. Try again later."); } catch {}
     return;
   }
@@ -45,6 +47,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   const albumName = trackData.album?.title ?? "Unknown Album";
   const albumId = trackData.album?.id;
   const albumCoverUrl = trackData.album?.cover_xl ?? trackData.album?.cover_big ?? "";
+  log("track pipeline: resolved", JSON.stringify({ trackId, trackName, artistName, albumName }));
 
   let releaseDate = "Unknown";
   if (albumId) {
@@ -59,11 +62,25 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   let lyrics: string;
   if (cached !== null) {
     lyrics = cached;
+    log(
+      "track pipeline: lyrics cache HIT for track",
+      trackId,
+      `(${lyrics.length} chars) preview:`,
+      previewText(lyrics),
+    );
   } else {
+    log("track pipeline: lyrics cache MISS — fetching LRCLIB for", JSON.stringify({ trackName, artistName }));
     try { await ctx.editMessageText("⏳ Fetching lyrics..."); } catch {}
     lyrics = (await getLyrics(trackName, artistName)) ?? "";
     if (lyrics) {
       await cacheLyrics(env.DB, trackId, lyrics);
+      log("track pipeline: lyrics cached for track", trackId);
+    } else {
+      log(
+        "track pipeline: NO LYRICS found for",
+        JSON.stringify({ trackId, trackName, artistName, albumName }),
+        "— continuing with empty lyrics page",
+      );
     }
   }
   const authorName = ctx.from?.first_name ?? "Unknown User";
@@ -83,6 +100,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
       releaseDate,
       lyrics,
     });
+    log("track pipeline: Telegraph created", telegraphResult.url, lyrics ? `(lyrics ${lyrics.length} chars)` : "(no lyrics)");
   } catch (error) {
     warn("Failed to create Telegraph page for track", trackName, error);
     await ctx.editMessageText("❌ Failed to create Telegraph page. Try again later.");
@@ -91,6 +109,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
 
   const myVersion = captureVersion(session);
   if (isStale(session, myVersion)) {
+    log("track pipeline: stale session after Telegraph, discarding");
     return;
   }
 
@@ -104,8 +123,21 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   session.telegraph.translationRequestId = undefined;
   resetTranslationState(session);
 
+  if (session.telegraph.languageAnalysis) {
+    const la = session.telegraph.languageAnalysis;
+    log(
+      "track pipeline: language analysis",
+      JSON.stringify({
+        mode: la.mode,
+        primary: la.primary,
+        secondary: la.secondary ?? null,
+      }),
+    );
+  }
+
   const pendingAudioFileId = session.audio.fileId;
   const hasAudio = Boolean(pendingAudioFileId);
+  log("track pipeline: done", JSON.stringify({ trackName, artistName, hasAudio, hasLyrics: Boolean(lyrics) }));
 
   const status = hasAudio ? "Telegraph Created & Audio Attached" : "Telegraph Created";
   const extra = hasAudio ? "" : "Send a music file to attach the Lyrics button to it.\n\n";

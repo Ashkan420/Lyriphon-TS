@@ -6,7 +6,7 @@ import { SessionData, SessionMode } from "../session/types";
 import { transition } from "../session/transitions";
 import { resetFlow } from "../session/flows";
 import { escapeMd as escapeMdUtil } from "./escapeMd";
-import { warn } from "./logger";
+import { log, warn } from "./logger";
 import type { InlineKeyboardMarkup } from "@grammyjs/types";
 
 export function formatDuration(seconds: number): string {
@@ -95,8 +95,11 @@ export async function searchAndShowResults(
   isStale?: (session: SessionData, capturedVersion: number) => boolean,
   fallbackQuery?: string,
 ) {
+  log("searchAndShowResults:", JSON.stringify({ searchQuery, displayLabel, fallbackQuery: fallbackQuery ?? null }));
+
   let results = await searchTracks(searchQuery);
   if (!results) {
+    log("searchAndShowResults: search failed for", JSON.stringify(searchQuery));
     await bot.sendMessage(chatId, "❌ Search failed. Try again later.");
     return false;
   }
@@ -104,23 +107,30 @@ export async function searchAndShowResults(
   // When the primary query (e.g. a Finglish transliteration) yields nothing,
   // retry once with the fallback (e.g. the original Farsi title).
   if (!results.length && fallbackQuery && fallbackQuery !== searchQuery) {
+    log("searchAndShowResults: 0 hits, trying fallback", JSON.stringify(fallbackQuery));
     const fallbackResults = await searchTracks(fallbackQuery);
     if (fallbackResults?.length) {
       results = fallbackResults;
+      log("searchAndShowResults: fallback succeeded with", results.length, "result(s)");
+    } else {
+      log("searchAndShowResults: fallback also empty for", JSON.stringify(fallbackQuery));
     }
   }
 
   if (version !== undefined && isStale && isStale(session, version)) {
+    log("searchAndShowResults: stale session, discarding results");
     return false;
   }
 
   if (!results.length) {
+    log("searchAndShowResults: no results for", JSON.stringify(displayLabel || searchQuery));
     await bot.sendMessage(chatId, `❌ No results found for: ${displayLabel}`);
     return false;
   }
 
   session.search.results = results;
   session.search.page = 0;
+  log("searchAndShowResults: presenting", results.length, "track(s) to user for", JSON.stringify(displayLabel || searchQuery));
 
   const buttons = buildTrackButtons(results, 0);
   const text = displayLabel

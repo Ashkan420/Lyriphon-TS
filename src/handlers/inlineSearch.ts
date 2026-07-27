@@ -4,6 +4,7 @@ import { searchTracks } from "../services/deezer";
 import { Env } from "../env";
 import { containsFarsi, transliterateFarsi } from "../services/translation/finglish";
 import { formatDuration } from "../utils/telegram";
+import { log } from "../utils/logger";
 
 export async function inlineSearch(ctx: Context, env: Env) {
   const queryText = ctx.inlineQuery?.query?.trim();
@@ -16,24 +17,32 @@ export async function inlineSearch(ctx: Context, env: Env) {
     return;
   }
 
+  log("inline search:", JSON.stringify(queryText));
+
   // Farsi titles don't match Deezer's Latin-script index. Search the Finglish
   // transliteration first, falling back to the original on no results.
-  let results = await searchTracks(
-    containsFarsi(queryText)
-      ? (await transliterateFarsi(env, queryText)) ?? queryText
-      : queryText,
-    5,
-  );
-  if (results && !results.length && containsFarsi(queryText)) {
+  let searchQuery = queryText;
+  if (containsFarsi(queryText)) {
+    const finglish = await transliterateFarsi(env, queryText);
+    if (finglish) {
+      searchQuery = finglish;
+      log("inline search: Finglish", JSON.stringify(finglish));
+    }
+  }
+  let results = await searchTracks(searchQuery, 5);
+  if (results && !results.length && containsFarsi(queryText) && searchQuery !== queryText) {
+    log("inline search: 0 hits, trying original Farsi");
     const fallback = await searchTracks(queryText, 5);
     if (fallback?.length) {
       results = fallback;
     }
   }
   if (!results) {
+    log("inline search failed for", JSON.stringify(queryText));
     await ctx.answerInlineQuery([], { cache_time: 60, is_personal: true });
     return;
   }
+  log("inline search: returning", results.length, "article(s)");
 
   const articles: InlineQueryResultArticle[] = results.map((item: any) => {
     const trackName = item?.title ?? "Unknown";

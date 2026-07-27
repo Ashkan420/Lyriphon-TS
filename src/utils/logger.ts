@@ -34,6 +34,31 @@ function stringifyArg(arg: unknown): string {
   }
 }
 
+/**
+ * Compact multi-line preview for logs. Joins the first few lines with " | "
+ * so Telegram /logs stays readable as single log rows.
+ */
+export function previewText(text: string, maxLines = 3, maxChars = 180): string {
+  const normalized = (text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!normalized) {
+    return "(empty)";
+  }
+
+  const lines = normalized.split("\n");
+  let preview = lines.slice(0, maxLines).join(" | ");
+  if (preview.length > maxChars) {
+    preview = `${preview.slice(0, maxChars)}…`;
+  }
+
+  if (lines.length > maxLines) {
+    return `${preview} (+${lines.length - maxLines} more lines, ${normalized.length} chars)`;
+  }
+  if (normalized.length > maxChars) {
+    return `${preview} (${normalized.length} chars)`;
+  }
+  return preview;
+}
+
 function push(level: LogLevel, args: unknown[]): void {
   const text = args.map(stringifyArg).join(" ");
   buffer.push({ ts: Date.now(), level, text });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { debug, isDebug, setDebug } from "../src/utils/logger";
+import { debug, isDebug, previewText, setDebug } from "../src/utils/logger";
 
 describe("logger", () => {
   afterEach(() => {
@@ -28,5 +28,17 @@ describe("logger", () => {
     setDebug(false);
     debug("hello");
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("previewText joins first lines and notes remaining", () => {
+    const text = "line one\nline two\nline three\nline four\nline five";
+    const preview = previewText(text, 3, 180);
+    expect(preview).toContain("line one | line two | line three");
+    expect(preview).toContain("+2 more lines");
+  });
+
+  it("previewText handles empty and short text", () => {
+    expect(previewText("")).toBe("(empty)");
+    expect(previewText("  hello  ")).toBe("hello");
   });
 });

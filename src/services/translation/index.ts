@@ -2,7 +2,7 @@ import { Env } from "../../env";
 import { geminiTranslate, GeminiResult } from "./gemini";
 import { composeTranslationPrompt } from "./prompts";
 import { findLanguage, LanguageCode } from "./types";
-import { warn } from "../../utils/logger";
+import { log, previewText, warn } from "../../utils/logger";
 import { LanguageAnalysis } from "./language-analyzer";
 import { parseTranslationJson } from "./combine";
 
@@ -48,10 +48,24 @@ export async function translateLyrics(
     return { type: "error" };
   }
 
+  const lineCount = lyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
+  log(
+    "translateLyrics:start",
+    JSON.stringify({
+      target: targetLangCode,
+      lineCount,
+      retryHint,
+      multilingualEnabled,
+      primary: langAnalysis?.primary ?? null,
+      mode: langAnalysis?.mode ?? null,
+    }),
+    "preview:",
+    previewText(lyrics),
+  );
+
   const prompt = composeTranslationPrompt(lyrics, language, langAnalysis, multilingualEnabled);
 
   if (retryHint) {
-    const lineCount = lyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
     prompt.system += RETRY_HINT.replace(/N/g, String(lineCount));
   }
 
@@ -61,10 +75,11 @@ export async function translateLyrics(
     const geminiResult = await geminiTranslate(env, prompt.system, prompt.user, prompt.modules);
 
     if (geminiResult.type !== "success") {
+      log("translateLyrics: gemini result", geminiResult.type);
       return geminiResult;
     }
 
-    const originalLineCount = lyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
+    const originalLineCount = lineCount;
     const parsedLines = parseTranslationJson(geminiResult.text, originalLineCount);
 
     if (!parsedLines) {
@@ -74,6 +89,13 @@ export async function translateLyrics(
       });
       return { type: "error" };
     }
+
+    log(
+      "translateLyrics:success",
+      JSON.stringify({ target: targetLangCode, lineCount: originalLineCount }),
+      "preview:",
+      previewText(parsedLines),
+    );
 
     return {
       type: "success",

@@ -1,7 +1,7 @@
 import { Context } from "grammy";
 import { safeDelete, safeAnswer, attachAudioAndPromptChannel, searchAndShowResults } from "../../utils/telegram";
 import { buildTrackButtons } from "../songSearch";
-import { warn } from "../../utils/logger";
+import { log, warn } from "../../utils/logger";
 import { transition } from "../../session/transitions";
 import { captureVersion, isStale, SessionMode } from "../../session/index";
 import { SessionData } from "../../session/types";
@@ -66,6 +66,7 @@ export async function handleAudioDecisionCallback(ctx: Context, session: Session
 
     const searchQuery = `${artist} ${title}`.trim();
     const displayLabel = artist ? `${artist} - ${title}` : title;
+    log("audio decision: search with", JSON.stringify({ title, artist, searchQuery }));
     const myVersion = captureVersion(session);
     const ok = await searchAndShowResults(
       ctx.api,

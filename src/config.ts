@@ -8,8 +8,8 @@ export const DEEZER_MAX_RETRIES = 5;       // total attempts = retries + 1
 export const LRCLIB_TIMEOUT_MS = 8000;
 export const LRCLIB_MAX_RETRIES = 1;       // 2 attempts max when flaky, not endless
 
-// Logger
-export const LOG_BUFFER_SIZE = 80;
+// Logger — room for a full search → lyrics → telegraph pipeline per interaction
+export const LOG_BUFFER_SIZE = 120;
 
 // Telegram effects
 export const MESSAGE_EFFECT_CONFETTI = "5046509860389126442";

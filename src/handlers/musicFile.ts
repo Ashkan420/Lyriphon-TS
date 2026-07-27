@@ -4,6 +4,7 @@ import { SessionData, SessionMode } from "../session/types";
 import { clearAudioState } from "../session/flows";
 import { inMode, transition } from "../session/transitions";
 import { searchAndShowResults, clearSendChannelPrompt } from "../utils/telegram";
+import { log } from "../utils/logger";
 import { buildTrackButtons } from "./songSearch";
 
 export async function handleMusicFile(ctx: Context, session: SessionData) {
@@ -47,6 +48,7 @@ export async function handleMusicFile(ctx: Context, session: SessionData) {
   const inEdit = inMode(session, SessionMode.EDIT_FIELD) || inMode(session, SessionMode.EDIT_LYRICS);
 
   if (telegraphUrl && lastData && !hasPendingAudio && !inEdit) {
+    log("audio file: pending decision (attach vs search)", JSON.stringify({ title, artist, filename }));
     session.audio.pendingDecision = {
       fileId: message.audio?.file_id,
       messageId: message.message_id,
@@ -79,6 +81,17 @@ export async function handleMusicFile(ctx: Context, session: SessionData) {
 
   const searchQuery = `${artist} ${title}`.trim();
   const displayLabel = artist ? `${artist} - ${title}` : title;
+  log(
+    "audio file received:",
+    JSON.stringify({
+      title,
+      artist,
+      filename,
+      titleTag: titleCandidate ?? null,
+      performerTag: artistCandidate ?? null,
+      searchQuery,
+    }),
+  );
 
   const ok = await searchAndShowResults(
     ctx.api,
