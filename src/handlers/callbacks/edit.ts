@@ -74,8 +74,8 @@ export async function handleNewFieldValue(ctx: Context, session: SessionData, en
     }
 
     const doneCancelButtons = [
-      [{ text: "✅ Done", callback_data: "done_lyrics", style: "success" as const }],
-      [{ text: "❌ Cancel", callback_data: "cancel_edit", style: "danger" as const }],
+      [{ text: "Done", callback_data: "done_lyrics", style: "success" as const }],
+      [{ text: "Cancel", callback_data: "cancel_edit", style: "danger" as const }],
     ];
 
     const prompt = await ctx.reply("✏️ Send more lyrics, or click Done when finished", {
