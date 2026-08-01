@@ -70,4 +70,15 @@ describe("lrclib service", () => {
     const result = await getLyrics("track", "artist");
     expect(result).toBe("Plain lyrics");
   });
+
+  it("getLyrics sends identifying User-Agent header", async () => {
+    let capturedHeaders: Record<string, string> | undefined;
+    vi.stubGlobal("fetch", vi.fn((_url: any, init: any) => {
+      capturedHeaders = init?.headers;
+      return Promise.resolve(new Response(JSON.stringify([{ plainLyrics: "x" }]), { status: 200 }));
+    }));
+    await getLyrics("track", "artist");
+    expect(capturedHeaders).toBeDefined();
+    expect(capturedHeaders!["User-Agent"]).toContain("LyriphonBot");
+  });
 });

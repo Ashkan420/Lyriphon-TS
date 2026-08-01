@@ -13,6 +13,7 @@ import { inMode } from "./session/transitions";
 import { safeDelete, cancelEdit } from "./utils/telegram";
 import { clearAudioState } from "./session/flows";
 import { warn, formatLogsForTelegram } from "./utils/logger";
+import { adminCommand, handleAdminCallback, isBotOwner } from "./handlers/admin";
 
 export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
   const bot = new Bot<Context>(env.BOT_TOKEN);
@@ -64,7 +65,7 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
 
   bot.command("session", async (ctx) => {
     const session = getSession(sessionDo.sessionData);
-    if (env.BOT_OWNER_ID && String(ctx.from?.id) !== env.BOT_OWNER_ID) {
+    if (!isBotOwner(ctx, env)) {
       return;
     }
     const mode = session.mode;
@@ -72,8 +73,16 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     await ctx.reply(`Session mode: ${mode}\nVersion: ${version}`);
   });
 
+  bot.command("admin", async (ctx) => {
+    if (!isBotOwner(ctx, env)) {
+      return;
+    }
+    const session = getSession(sessionDo.sessionData);
+    await adminCommand(ctx, session, sessionDo);
+  });
+
   bot.command("debug", async (ctx) => {
-    if (env.BOT_OWNER_ID && String(ctx.from?.id) !== env.BOT_OWNER_ID) {
+    if (!isBotOwner(ctx, env)) {
       return;
     }
     const arg = (typeof ctx.match === "string" ? ctx.match : "").trim().toLowerCase();
@@ -85,7 +94,7 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
   });
 
   bot.command("logs", async (ctx) => {
-    if (env.BOT_OWNER_ID && String(ctx.from?.id) !== env.BOT_OWNER_ID) {
+    if (!isBotOwner(ctx, env)) {
       return;
     }
     const text = formatLogsForTelegram();
@@ -100,7 +109,7 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
   });
 
   bot.command("multilingual", async (ctx) => {
-    if (env.BOT_OWNER_ID && String(ctx.from?.id) !== env.BOT_OWNER_ID) {
+    if (!isBotOwner(ctx, env)) {
       return;
     }
     const current = sessionDo.sessionData.telegraph.multilingualEnabled ?? true;
@@ -144,6 +153,11 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     const session = getSession(sessionDo.sessionData);
     if (data.startsWith("search_page_")) {
       await handleSearchPageCallback(ctx, session);
+      return;
+    }
+
+    if (data.startsWith("admin_")) {
+      await handleAdminCallback(ctx, session, sessionDo, env);
       return;
     }
 

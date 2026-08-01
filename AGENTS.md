@@ -87,7 +87,7 @@ Do **not** reintroduce a monolith `handlers/callbacks.ts`.
    Do **not** reorder, prune, or "fix" names. User confirmed primary is real.
 6. **D1 lyrics cache** (`src/db/lyrics.ts`): key = Deezer `track_id`. Cache **only when lyrics found**. Never cache empty/"not found".
 7. **Translation combine** (`combine.ts`): returns `CombineResult | null` (`{ combined, mismatch }`). Mismatch degrades to original + separator + translation; `translate.ts` may retry once. Don't revert to hard-null-on-mismatch.
-8. **Owner commands** gated by `BOT_OWNER_ID`: `/session`, `/debug`, `/logs`, `/multilingual` (and related callbacks).
+8. **Owner commands** gated by `BOT_OWNER_ID`: `/admin` (settings panel with debug/multilingual toggles + logs), `/session`, `/debug`, `/logs`, `/multilingual` (and related callbacks).
 9. **Optional Gemini:** missing `GEMINI_API_KEY` → translation/Finglish degrade gracefully, don't crash.
 
 ## Env / secrets
@@ -156,3 +156,4 @@ Bindings live in `wrangler.toml`. Prod secrets: `wrangler secret put …`.
 | Translate / Finglish | `services/translation/*` |
 | D1 cache/tables | `src/db/*` |
 | Timeouts / constants | `src/config.ts` |
+| Owner admin panel | `src/handlers/admin.ts` (`/admin`) |

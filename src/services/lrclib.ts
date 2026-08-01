@@ -5,6 +5,12 @@ import { log, previewText, warn } from "../utils/logger";
 
 const LRCLIB_SEARCH = "https://lrclib.net/api/search";
 
+// LRCLIB rejects requests without an identifying User-Agent (HTTP 403).
+const LRCLIB_HEADERS = {
+  "User-Agent": "LyriphonBot/1.0 (https://t.me/lyriphon_bot)",
+  "Accept": "application/json",
+};
+
 export async function getLyrics(track: string, artist: string, retries = LRCLIB_MAX_RETRIES, delay = 0.4) {
   log("LRCLIB search:", JSON.stringify({ track, artist }));
 
@@ -14,6 +20,7 @@ export async function getLyrics(track: string, artist: string, retries = LRCLIB_
     url.searchParams.set("artist_name", artist);
 
     const response = await fetchWithTimeout(url.toString(), {
+      headers: LRCLIB_HEADERS,
       timeoutMs: LRCLIB_TIMEOUT_MS,
     });
     
