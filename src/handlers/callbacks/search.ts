@@ -69,9 +69,20 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
       previewText(lyrics),
     );
   } else {
-    log("track pipeline: lyrics cache MISS — fetching LRCLIB for", JSON.stringify({ trackName, artistName }));
-    try { await ctx.editMessageText("⏳ Fetching lyrics..."); } catch {}
-    lyrics = (await getLyrics(trackName, artistName)) ?? "";
+    log(
+      "track pipeline: lyrics cache MISS — fetching LRCLIB for",
+      JSON.stringify({ trackName, artistName, albumName }),
+    );
+
+    try {
+      await ctx.editMessageText("⏳ Fetching lyrics...");
+    } catch {}
+
+    lyrics = (await getLyrics(
+      trackName,
+      artistName,
+      albumName,
+    )) ?? "";
     if (lyrics) {
       await cacheLyrics(env.DB, trackId, lyrics);
       log("track pipeline: lyrics cached for track", trackId);
