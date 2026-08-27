@@ -37,6 +37,35 @@ describe("analyzeLanguages", () => {
     expect(result!.primary.code).toBe("ko");
   });
 
+  it("detects Arabic by script (Arabic-script text without Persian markers)", () => {
+    const lyrics = "قلبي معك وروحي في سكون الليل\nوأنتِ بعيد والليل طويل";
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("ar");
+  });
+
+  it("still detects Persian when Persian-exclusive markers are present", () => {
+    const lyrics = "دلم گرفته گیرم\nبگیر که خوبی و من بسازم";
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("fa");
+  });
+
+  it("detects Mandarin by Han characters only when no kana are present", () => {
+    const lyrics = "月光洒在窗台上\n思念像流水一样长\n我望着远方发着呆";
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("zh");
+  });
+
+  it("keeps Japanese classification when kana are present alongside kanji", () => {
+    // Heavy kanji usage with kana particles — must stay ja, not flip to zh.
+    const lyrics = "君の瞳に映る世界は\n静かに時を刻み始める\n風が運ぶ命の歌";
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("ja");
+  });
+
   it("falls back to franc for Latin-script languages", () => {
     const lyrics =
       "When the morning comes we will rise again\n" +

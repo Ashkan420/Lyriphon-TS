@@ -7,6 +7,13 @@ import { KOREAN_SOURCE } from "./prompts/sources/korean";
 import { SPANISH_SOURCE } from "./prompts/sources/spanish";
 import { FRENCH_SOURCE } from "./prompts/sources/french";
 import { PERSIAN_SOURCE } from "./prompts/sources/persian";
+import { ARABIC_SOURCE } from "./prompts/sources/arabic";
+import { HINDI_SOURCE } from "./prompts/sources/hindi";
+import { RUSSIAN_SOURCE } from "./prompts/sources/russian";
+import { TURKISH_SOURCE } from "./prompts/sources/turkish";
+import { ITALIAN_SOURCE } from "./prompts/sources/italian";
+import { PORTUGUESE_SOURCE } from "./prompts/sources/portuguese";
+import { CHINESE_SOURCE } from "./prompts/sources/chinese";
 import { getHintFragment } from "./prompts/hints";
 
 export interface DetectedLanguage {
@@ -34,13 +41,27 @@ const FRANC_TO_CANONICAL: Record<string, string> = {
   ita: "it", rus: "ru", zho: "zh",
 };
 
-const SCRIPT_PATTERNS: Array<{ regex: RegExp; code: string }> = [
+// excludeIf: skip the pattern when this regex matches anywhere in the text.
+// Used for Han characters, which are shared with Japanese — kana presence
+// means the text is Japanese, so zh must never win over ja.
+type ScriptPattern = { regex: RegExp; code: string; excludeIf?: RegExp };
+
+const SCRIPT_PATTERNS: ScriptPattern[] = [
   { regex: /[\u3040-\u309F\u30A0-\u30FF]/, code: "ja" },
   { regex: /[\uAC00-\uD7AF]/, code: "ko" },
-  { regex: /[\u0600-\u06FF]/, code: "fa" },
   { regex: /[\u0900-\u097F]/, code: "hi" },
   { regex: /[\u0400-\u04FF]/, code: "ru" },
+  { regex: /[\u4E00-\u9FFF]/, code: "zh", excludeIf: /[\u3040-\u30FF]/ },
 ];
+
+// Persian, Arabic, and Urdu share the Arabic block (\u0600-\u06FF), so the
+// block alone can't identify the language. Persian is recognized by its
+// exclusive letters (پ چ ژ گ) and its distinct ye/kaf forms (ی U+06CC,
+// ک U+06A9); Arabic-script text without those markers is treated as Arabic.
+// (Urdu shares most Persian markers and is therefore treated as fa — its
+// poetic tradition is Persian-derived, making PERSIAN_SOURCE the better fit.)
+const ARABIC_BLOCK_RE = /[\u0600-\u06FF]/;
+const PERSIAN_MARKERS_RE = /[\u067E\u0686\u0698\u06AF\u06CC\u06A9]/;
 
 const DIALECT_CAP = 1.2;
 const MIN_LENGTH = 50;
@@ -53,6 +74,13 @@ const SOURCE_FRAGMENTS: Record<string, string> = {
   es: SPANISH_SOURCE,
   fr: FRENCH_SOURCE,
   fa: PERSIAN_SOURCE,
+  ar: ARABIC_SOURCE,
+  hi: HINDI_SOURCE,
+  ru: RUSSIAN_SOURCE,
+  tr: TURKISH_SOURCE,
+  it: ITALIAN_SOURCE,
+  pt: PORTUGUESE_SOURCE,
+  zh: CHINESE_SOURCE,
 };
 
 interface ScriptResult {
@@ -64,7 +92,10 @@ function detectByScript(lyrics: string): ScriptResult | null {
   const totalChars = lyrics.replace(/\s/g, "").length;
   if (totalChars === 0) return null;
 
-  for (const { regex, code } of SCRIPT_PATTERNS) {
+  for (const { regex, code, excludeIf } of SCRIPT_PATTERNS) {
+    if (excludeIf && excludeIf.test(lyrics)) {
+      continue;
+    }
     const matches = lyrics.match(new RegExp(regex.source, "g"));
     if (matches) {
       const ratio = matches.length / totalChars;
@@ -73,6 +104,17 @@ function detectByScript(lyrics: string): ScriptResult | null {
       }
     }
   }
+
+  // Arabic block last: it never overlaps kana/Hangul/Devanagari/Cyrillic,
+  // so checking it after the unambiguous scripts is safe.
+  if (ARABIC_BLOCK_RE.test(lyrics)) {
+    const matches = lyrics.match(new RegExp(ARABIC_BLOCK_RE.source, "g"));
+    const ratio = matches ? matches.length / totalChars : 0;
+    if (ratio >= SCRIPT_RATIO_THRESHOLD) {
+      return { code: PERSIAN_MARKERS_RE.test(lyrics) ? "fa" : "ar", ratio };
+    }
+  }
+
   return null;
 }
 
