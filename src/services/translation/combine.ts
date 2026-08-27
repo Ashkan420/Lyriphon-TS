@@ -10,8 +10,12 @@ function normalizeLine(line: string): string {
   return line.replace(/\u200B/g, "").replace(/\u200C/g, "").trimEnd();
 }
 
-function stripTrailingPunctuation(s: string): string {
-  return s.trim().replace(/[.,!?;:'")\]]+$/, "");
+function normalizeForComparison(s: string): string {
+  return s
+    .replace(/[\u200B\u200C\uFEFF]/g, "") // invisible chars
+    .replace(/[―—–-]+$/g, "")             // trailing dash decorations
+    .replace(/[\p{P}\p{S}]+$/gu, "")      // trailing punctuation/symbols
+    .trim();
 }
 
 const CRLF = "\r\n";
@@ -162,7 +166,7 @@ export function combineLyricsWithTranslation(originalLyrics: string, translatedL
       parts.push("");
     } else {
       parts.push(orig);
-      if (stripTrailingPunctuation(trans) !== stripTrailingPunctuation(orig)) {
+      if (normalizeForComparison(trans) !== normalizeForComparison(orig)) {
         parts.push(`[${trans}]`);
       }
     }
@@ -207,7 +211,7 @@ export function combineLyricsFromJson(
       parts.push("");
     } else {
       parts.push(orig);
-      if (stripTrailingPunctuation(trans) !== stripTrailingPunctuation(orig)) {
+      if (normalizeForComparison(trans) !== normalizeForComparison(orig)) {
         parts.push(`[${trans}]`);
       }
     }

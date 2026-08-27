@@ -2,9 +2,9 @@ import { Env } from "../../env";
 import { debug, warn } from "../../utils/logger";
 
 const MODELS = [
+  "gemini-3.5-flash-lite",
   "gemini-3.1-flash-lite",
   "gemini-2.5-flash",
-  "gemini-flash-latest",
 ];
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -71,6 +71,28 @@ export async function geminiTranslate(
               temperature: 0.1,
               topP: 0.6,
               topK: 10,
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: "OBJECT",
+                properties: {
+                  lines: {
+                    type: "ARRAY",
+                    items: {
+                      type: "OBJECT",
+                      properties: {
+                        n: {
+                          type: "INTEGER",
+                        },
+                        t: {
+                          type: "STRING",
+                        },
+                      },
+                      required: ["n", "t"],
+                    },
+                  },
+                },
+                required: ["lines"],
+              },
             },
           }),
           signal: controller.signal,

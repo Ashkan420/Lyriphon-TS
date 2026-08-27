@@ -12,14 +12,14 @@ Repo: https://github.com/Ashkan420/Lyriphon-TS · License: **AGPL-3.0**
 
 ## Stack & commands
 
-| Command | Purpose |
-| --- | --- |
-| `npm install` | deps |
-| `npx wrangler dev` | local worker |
-| `npx wrangler deploy` | production |
-| `npx tsc -p . --noEmit` | **typecheck gate** |
-| `npx vitest run` | **test gate** (prefer `run`, not watch) |
-| `npm test` | vitest (watch by default) |
+| Command                 | Purpose                                 |
+|-------------------------|-----------------------------------------|
+| `npm install`           | deps                                    |
+| `npx wrangler dev`      | local worker                            |
+| `npx wrangler deploy`   | production                              |
+| `npx tsc -p . --noEmit` | **typecheck gate**                      |
+| `npx vitest run`        | **test gate** (prefer `run`, not watch) |
+| `npm test`              | vitest (watch by default)               |
 
 No vitest config file — defaults. After a `tsc` build, `rm -rf dist` before tests if you see duplicate/stale suites (compiled `dist/` twins get picked up).
 
@@ -36,20 +36,20 @@ Telegram POST /webhook
   → handlers / session / services / db
 ```
 
-| Path | Role |
-| --- | --- |
-| `src/index.ts` | Worker entry, webhook auth, DO routing |
-| `src/do.ts` | `SessionDO` — session storage, alarm cleanup, debug flag |
-| `src/bot.ts` | Command/callback/message registration; `bot.catch` swallows handler errors |
-| `src/env.ts` | `Env` bindings + secrets |
-| `src/config.ts` | Constants (timeouts, channel link, etc.) |
-| `src/handlers/` | User-facing handlers |
-| `src/handlers/callbacks/` | Package: track pick, edit, translate, channel send, logs |
-| `src/session/` | FSM: `types`, `flows`, `transitions` (`VALID_TRANSITIONS`, version bump) |
-| `src/services/` | Deezer, LRCLIB, Telegraph, translation/ |
-| `src/db/` | D1: `channels`, `transliterations`, `lyrics` |
-| `src/utils/` | retry, fetch, logger, telegram helpers, URL validation |
-| `test/` | vitest unit tests |
+| Path                      | Role                                                                       |
+|---------------------------|----------------------------------------------------------------------------|
+| `src/index.ts`            | Worker entry, webhook auth, DO routing                                     |
+| `src/do.ts`               | `SessionDO` — session storage, alarm cleanup, debug flag                   |
+| `src/bot.ts`              | Command/callback/message registration; `bot.catch` swallows handler errors |
+| `src/env.ts`              | `Env` bindings + secrets                                                   |
+| `src/config.ts`           | Constants (timeouts, channel link, etc.)                                   |
+| `src/handlers/`           | User-facing handlers                                                       |
+| `src/handlers/callbacks/` | Package: track pick, edit, translate, channel send, logs                   |
+| `src/session/`            | FSM: `types`, `flows`, `transitions` (`VALID_TRANSITIONS`, version bump)   |
+| `src/services/`           | Deezer, LRCLIB, Telegraph, translation/                                    |
+| `src/db/`                 | D1: `channels`, `transliterations`, `lyrics`                               |
+| `src/utils/`              | retry, fetch, logger, telegram helpers, URL validation                     |
+| `test/`                   | vitest unit tests                                                          |
 
 ### Callbacks package (public API)
 
@@ -94,17 +94,17 @@ Do **not** reintroduce a monolith `handlers/callbacks.ts`.
 
 From `.dev.vars.example` / `Env`:
 
-| Name | Required | Notes |
-| --- | :---: | --- |
-| `BOT_TOKEN` | yes | Telegram |
-| `TELEGRAPH_ACCESS_TOKEN` | yes | pages |
-| `WEBHOOK_SECRET_TOKEN` | yes | header check |
-| `BOT_OWNER_ID` | no | owner cmds |
-| `WEBHOOK_PATH` | no | default `webhook` |
-| `TRANSLATION_PROVIDER` | no | only `gemini` |
-| `GEMINI_API_KEY` | no | translation + Finglish |
-| `DB` | binding | D1 |
-| `SESSION_DO` | binding | DO namespace |
+| Name                     | Required | Notes                  |
+|--------------------------|:--------:|------------------------|
+| `BOT_TOKEN`              |   yes    | Telegram               |
+| `TELEGRAPH_ACCESS_TOKEN` |   yes    | pages                  |
+| `WEBHOOK_SECRET_TOKEN`   |   yes    | header check           |
+| `BOT_OWNER_ID`           |    no    | owner cmds             |
+| `WEBHOOK_PATH`           |    no    | default `webhook`      |
+| `TRANSLATION_PROVIDER`   |    no    | only `gemini`          |
+| `GEMINI_API_KEY`         |    no    | translation + Finglish |
+| `DB`                     | binding  | D1                     |
+| `SESSION_DO`             | binding  | DO namespace           |
 
 Bindings live in `wrangler.toml`. Prod secrets: `wrangler secret put …`.
 
@@ -146,14 +146,14 @@ Bindings live in `wrangler.toml`. Prod secrets: `wrangler secret put …`.
 
 ## Quick "where do I change X?"
 
-| Goal | Start here |
-| --- | --- |
-| Webhook / routing | `src/index.ts` |
-| New command | `src/bot.ts` + `src/handlers/` |
-| Callback button | `src/handlers/callbacks/dispatcher.ts` + domain file |
-| Session shape / modes | `src/session/types.ts`, `transitions.ts`, `flows.ts` |
-| Deezer / lyrics / page | `services/deezer.ts`, `lrclib.ts`, `telegraph.ts` |
-| Translate / Finglish | `services/translation/*` |
-| D1 cache/tables | `src/db/*` |
-| Timeouts / constants | `src/config.ts` |
-| Owner admin panel | `src/handlers/admin.ts` (`/admin`) |
+| Goal                   | Start here                                           |
+|------------------------|------------------------------------------------------|
+| Webhook / routing      | `src/index.ts`                                       |
+| New command            | `src/bot.ts` + `src/handlers/`                       |
+| Callback button        | `src/handlers/callbacks/dispatcher.ts` + domain file |
+| Session shape / modes  | `src/session/types.ts`, `transitions.ts`, `flows.ts` |
+| Deezer / lyrics / page | `services/deezer.ts`, `lrclib.ts`, `telegraph.ts`    |
+| Translate / Finglish   | `services/translation/*`                             |
+| D1 cache/tables        | `src/db/*`                                           |
+| Timeouts / constants   | `src/config.ts`                                      |
+| Owner admin panel      | `src/handlers/admin.ts` (`/admin`)                   |
