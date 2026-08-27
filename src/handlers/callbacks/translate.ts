@@ -131,7 +131,13 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
       return;
     }
 
-    if (isSourceLanguage(session.telegraph.languageAnalysis, langCode)) {
+    // English stays selectable even when detection flags English — franc /
+    // script detection produces false positives (mixed or transliterated
+    // lyrics), so users can force an English translation regardless.
+    if (
+      langCode !== "en" &&
+      isSourceLanguage(session.telegraph.languageAnalysis, langCode)
+    ) {
       await safeAnswer(ctx, "Lyrics already appear to be in this language.");
       return;
     }
