@@ -32,4 +32,34 @@ describe("utils", () => {
     expect(safeLink("Hello", "")).toBe("Hello");
     expect(safeLink("Hello")).toBe("Hello");
   });
+
+  describe("urlValidation edge cases", () => {
+    it("rejects private IPv4 ranges", () => {
+      expect(isValidUrl("http://10.0.0.1/x")).toBe(false);
+      expect(isValidUrl("http://172.16.0.1/x")).toBe(false);
+      expect(isValidUrl("http://172.31.255.255/x")).toBe(false);
+      expect(isValidUrl("http://192.168.1.1/x")).toBe(false);
+      expect(isValidUrl("http://169.254.1.1/x")).toBe(false);
+      expect(isValidUrl("http://0.0.0.0/x")).toBe(false);
+      expect(isValidUrl("http://224.0.0.1/x")).toBe(false);
+    });
+
+    it("allows public IPv4 and public-range 172.x", () => {
+      expect(isValidUrl("http://8.8.8.8/x")).toBe(true);
+      expect(isValidUrl("http://172.32.0.1/x")).toBe(true);
+    });
+
+    it("rejects IPv6 loopback and unique-local", () => {
+      expect(isValidUrl("http://[::1]/x")).toBe(false);
+      expect(isValidUrl("http://[fc00::1]/x")).toBe(false);
+      expect(isValidUrl("http://[fd12::1]/x")).toBe(false);
+    });
+
+    it("rejects local/internal hostname suffixes and allows trailing dots", () => {
+      expect(isValidUrl("http://box.local/x")).toBe(false);
+      expect(isValidUrl("http://svc.internal/x")).toBe(false);
+      expect(isValidUrl("http://my.localhost/x")).toBe(false);
+      expect(isValidUrl("http://example.com./x")).toBe(true);
+    });
+  });
 });

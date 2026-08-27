@@ -26,7 +26,12 @@ export default {
 
     const id = env.SESSION_DO.idFromName(String(userId));
     const obj = env.SESSION_DO.get(id);
-    return await obj.fetch(request);
+    const doRequest = new Request(request.url, {
+      method: "POST",
+      headers: new Headers({ "x-lyriphon-user-id": String(userId) }),
+      body: await request.text(),
+    });
+    return await obj.fetch(doRequest);
   },
 };
 

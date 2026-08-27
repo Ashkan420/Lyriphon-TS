@@ -1,13 +1,15 @@
 // Lightweight logger wrapping console.* with a consistent prefix.
 //
-// `debug(...)` only emits when the module-level `debugEnabled` flag is on.
-// The flag is per-DO (per-user): each Durable Object isolate handles one user
-// single-threaded under blockConcurrencyWhile, and there is no shared global
-// state across isolates. So toggling /debug enables verbose logs only for that
-// admin's own DO — exactly the scope that's useful when debugging their own
-// interactions. `setDebug` is called at the start of each DO fetch (after
-// loadSession, before handleUpdate), so the flag is set before any handler runs.
+// Scoping model: one Workers isolate can host MANY SessionDO instances (one per
+// user) running concurrently — blockConcurrencyWhile only serializes a single
+// DO's own updates, so module-level globals would mix users. Log buffers and
+// the debug flag are therefore keyed by a per-request scope (the user id),
+// established with AsyncLocalStorage via runWithLogScope() at the start of each
+// DO fetch (src/do.ts). Entries logged outside any scope (e.g. alarm-driven
+// deletes) land in the "_global" scope. /logs dumps the merged view across all
+// scopes, newest last.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { LOG_BUFFER_SIZE } from "../config";
 
 const PREFIX = "[lyriphon]";
@@ -15,10 +17,29 @@ const PREFIX = "[lyriphon]";
 type LogLevel = "log" | "warn" | "error" | "debug";
 type LogEntry = { ts: number; level: LogLevel; text: string };
 
-const buffer: LogEntry[] = [];
+const logScope = new AsyncLocalStorage<string>();
+const GLOBAL_SCOPE = "_global";
+
+export function runWithLogScope<T>(scope: string, fn: () => Promise<T>): Promise<T> {
+  return logScope.run(scope, fn);
+}
+
+function currentScope(): string {
+  return logScope.getStore() ?? GLOBAL_SCOPE;
+}
+
+const buffers = new Map<string, LogEntry[]>();
+const debugFlags = new Map<string, boolean>();
 const MAX = LOG_BUFFER_SIZE;
 
-let debugEnabled = false;
+function getBuffer(scope: string): LogEntry[] {
+  let list = buffers.get(scope);
+  if (!list) {
+    list = [];
+    buffers.set(scope, list);
+  }
+  return list;
+}
 
 function stringifyArg(arg: unknown): string {
   if (arg instanceof Error) {
@@ -61,18 +82,26 @@ export function previewText(text: string, maxLines = 3, maxChars = 180): string 
 
 function push(level: LogLevel, args: unknown[]): void {
   const text = args.map(stringifyArg).join(" ");
-  buffer.push({ ts: Date.now(), level, text });
-  if (buffer.length > MAX) {
-    buffer.splice(0, buffer.length - MAX);
+  const list = getBuffer(currentScope());
+  list.push({ ts: Date.now(), level, text });
+  if (list.length > MAX) {
+    list.splice(0, list.length - MAX);
   }
 }
 
 export function getRecentLogs(limit = MAX): LogEntry[] {
-  return buffer.slice(-limit);
+  return getBuffer(currentScope()).slice(-limit);
+}
+
+// Merged view across every scope, oldest → newest (owner's /logs dump).
+function allLogs(): LogEntry[] {
+  const entries: LogEntry[] = [];
+  for (const list of buffers.values()) entries.push(...list);
+  return entries.sort((a, b) => a.ts - b.ts);
 }
 
 export function formatLogsForTelegram(limit = 40): string {
-  const logs = getRecentLogs(limit);
+  const logs = allLogs().slice(-limit);
   if (logs.length === 0) {
     return "📋 No logs yet.";
   }
@@ -105,11 +134,11 @@ export function formatLogsForTelegram(limit = 40): string {
 }
 
 export function setDebug(enabled: boolean): void {
-  debugEnabled = enabled;
+  debugFlags.set(currentScope(), enabled);
 }
 
 export function isDebug(): boolean {
-  return debugEnabled;
+  return debugFlags.get(currentScope()) ?? false;
 }
 
 export function log(...args: unknown[]): void {
@@ -128,7 +157,7 @@ export function error(...args: unknown[]): void {
 }
 
 export function debug(...args: unknown[]): void {
-  if (debugEnabled) {
+  if (isDebug()) {
     push("debug", args);
     console.log(PREFIX, "[debug]", ...args);
   }

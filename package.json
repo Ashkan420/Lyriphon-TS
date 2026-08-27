@@ -1,0 +1,22 @@
+{
+  "name": "lyriphon-workers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p .",
+    "dev": "wrangler dev",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "franc": "^6.2.0",
+    "grammy": "^1.44.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "*",
+    "@types/node": "^26.4.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.9",
+    "wrangler": "^4.105.0"
+  }
+}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { debug, isDebug, previewText, setDebug } from "../src/utils/logger";
+import { debug, isDebug, previewText, setDebug, runWithLogScope, log, getRecentLogs } from "../src/utils/logger";
 
 describe("logger", () => {
   afterEach(() => {
@@ -40,5 +40,21 @@ describe("logger", () => {
   it("previewText handles empty and short text", () => {
     expect(previewText("")).toBe("(empty)");
     expect(previewText("  hello  ")).toBe("hello");
+  });
+
+  it("keeps buffers and debug flags separate per scope", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runWithLogScope("user-a", async () => {
+      setDebug(true);
+      log("scope-test-from-a");
+      expect(isDebug()).toBe(true);
+      expect(getRecentLogs().some((e) => e.text === "scope-test-from-a")).toBe(true);
+    });
+    await runWithLogScope("user-b", async () => {
+      expect(isDebug()).toBe(false); // not affected by user-a
+      log("scope-test-from-b");
+      expect(getRecentLogs().some((e) => e.text === "scope-test-from-a")).toBe(false);
+    });
+    spy.mockRestore();
   });
 });

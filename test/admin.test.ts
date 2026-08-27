@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminSettingsText, buildAdminKeyboard } from "../src/handlers/admin";
+import { adminSettingsText, buildAdminKeyboard, isBotOwner } from "../src/handlers/admin";
 
 describe("admin settings UI", () => {
   it("buildAdminKeyboard colors toggles and hides Logs when debug is off", () => {
@@ -30,5 +30,19 @@ describe("admin settings UI", () => {
     const text = adminSettingsText(true, false);
     expect(text).toContain("Debug: <b>on</b>");
     expect(text).toContain("Multilingual: <b>off</b>");
+  });
+});
+
+describe("isBotOwner", () => {
+  const ctx = (id?: number) => ({ from: id ? { id } : undefined }) as any;
+
+  it("returns false for everyone when BOT_OWNER_ID is unset (fail closed)", () => {
+    expect(isBotOwner(ctx(123), {} as any)).toBe(false);
+    expect(isBotOwner(ctx(undefined), {} as any)).toBe(false);
+  });
+
+  it("matches only the configured owner id", () => {
+    expect(isBotOwner(ctx(42), { BOT_OWNER_ID: "42" } as any)).toBe(true);
+    expect(isBotOwner(ctx(43), { BOT_OWNER_ID: "42" } as any)).toBe(false);
   });
 });

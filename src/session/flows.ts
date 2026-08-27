@@ -132,6 +132,9 @@ export function resetFlow(flow: AudioFlowData | SearchFlowData | EditFlowData | 
     flow.translationRequestId = undefined;
     flow.isTranslating = false;
     flow.translateMessageId = undefined;
+    flow.translationCooldownUntil = undefined;
+    flow.pendingTranslationLang = undefined;
+    flow.languageAnalysis = undefined;
     flow.locked = false;
     return;
   }

@@ -61,9 +61,12 @@ export async function geminiTranslate(
 
         debug("geminiTranslate:modules", modules);
 
-        const response = await fetch(`${url}?key=${env.GEMINI_API_KEY}`, {
+        const response = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": env.GEMINI_API_KEY,
+          },
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: systemPrompt }] },
             contents: [{ parts: [{ text: userPrompt }] }],

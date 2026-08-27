@@ -76,18 +76,21 @@ Do **not** reintroduce a monolith `handlers/callbacks.ts`.
 2. **Session versioning:** async work must respect `captureVersion` / `isStale` (or equivalent). Don't apply stale results after a newer transition.
 3. **Mode transitions** go through `transition()` in `session/transitions.ts`. Don't assign `session.mode` ad hoc unless you know why.
 4. **`strictNullChecks` is on** (`strict: true`). Coerce at call sites: `string | null` → `string` with `?? ""` when downstream requires `string` (e.g. lyrics → Telegraph).
-5. **Gemini models** in `src/services/translation/gemini.ts`:
+5. **Gemini models** in `src/services/translation/gemini.ts` — the chain as of
+   commit `703119d`:
    ```ts
    const MODELS = [
-     "gemini-3.1-flash-lite",  // active primary — not a typo
-     "gemini-2.5-flash",       // documented fallback
-     "gemini-flash-latest",    // documented fallback
+     "gemini-3.5-flash-lite",  // active primary
+     "gemini-3.1-flash-lite",
+     "gemini-2.5-flash",
    ];
    ```
-   Do **not** reorder, prune, or "fix" names. User confirmed primary is real.
+   Do **not** reorder, prune, or "fix" names. Before editing `MODELS` in any
+   way, re-read `gemini.ts` — this list is a snapshot; the code is the source
+   of truth.
 6. **D1 lyrics cache** (`src/db/lyrics.ts`): key = Deezer `track_id`. Cache **only when lyrics found**. Never cache empty/"not found".
 7. **Translation combine** (`combine.ts`): returns `CombineResult | null` (`{ combined, mismatch }`). Mismatch degrades to original + separator + translation; `translate.ts` may retry once. Don't revert to hard-null-on-mismatch.
-8. **Owner commands** gated by `BOT_OWNER_ID`: `/admin` (settings panel with debug/multilingual toggles + logs), `/session`, `/debug`, `/logs`, `/multilingual` (and related callbacks).
+8. **Owner commands** gated by `BOT_OWNER_ID`: `/admin` (settings panel with debug/multilingual toggles + logs), `/session`, `/debug`, `/logs`, `/multilingual` (and related callbacks). Fail closed when `BOT_OWNER_ID` is unset — owner commands are disabled for everyone.
 9. **Optional Gemini:** missing `GEMINI_API_KEY` → translation/Finglish degrade gracefully, don't crash.
 
 ## Env / secrets

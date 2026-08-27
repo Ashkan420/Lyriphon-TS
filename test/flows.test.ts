@@ -33,4 +33,10 @@ describe("Flow state factories", () => {
     expect(flow.url).toBeUndefined();
     expect(flow.data).toBeUndefined();
   });
+
+  it("creates a fresh telegraph flow without translation cooldown state", () => {
+    const flow = createTelegraphFlow();
+    expect(flow.translationCooldownUntil).toBeUndefined();
+    expect(flow.pendingTranslationLang).toBeUndefined();
+  });
 });

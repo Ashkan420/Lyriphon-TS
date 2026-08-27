@@ -18,8 +18,6 @@ function normalizeForComparison(s: string): string {
     .trim();
 }
 
-const CRLF = "\r\n";
-
 // ── JSON translation parsing ────────────────────────────────────────────────
 
 interface JsonLine {
@@ -69,7 +67,7 @@ export function parseTranslationJson(
   // Validate every entry has n and t, and n is sequential
   for (let i = 0; i < parsed.lines.length; i++) {
     const entry = parsed.lines[i];
-    if (typeof entry.n !== "number" || typeof entry.t !== "undefined" && typeof entry.t !== "string") {
+    if (typeof entry.n !== "number" || typeof entry.t !== "string") {
       warn("parseTranslationJson: invalid entry at index", { index: i, entry });
       return null;
     }
@@ -110,12 +108,14 @@ export function combineLyricsWithTranslation(originalLyrics: string, translatedL
   }
 
   const originalLines = originalLyrics
-    .replace(CRLF, "\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
     .split("\n")
     .map(normalizeLine);
 
   const translatedLines = translatedLyrics
-    .replace(CRLF, "\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
     .split("\n")
     .map(normalizeLine);
 
@@ -191,7 +191,8 @@ export function combineLyricsFromJson(
   }
 
   const originalLines = originalLyrics
-    .replace(CRLF, "\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
     .split("\n")
     .map(normalizeLine);
 

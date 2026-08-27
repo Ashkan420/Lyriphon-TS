@@ -3,10 +3,17 @@ import { Env } from "./env";
 import { createSessionData } from "./session/flows";
 import { SessionData } from "./session/types";
 import { createBot } from "./bot";
-import { log, warn, setDebug } from "./utils/logger";
+import { log, warn, setDebug, runWithLogScope } from "./utils/logger";
 
 const STORAGE_KEY = "session";
 const DEBUG_KEY = "debug";
+
+// Earliest remaining deleteAt in the queue, or null when empty. Used to
+// re-arm the alarm after it fires so future items are not stranded.
+export function nextAlarmTime(queue: Array<{ deleteAt: number }>): number | null {
+  if (queue.length === 0) return null;
+  return Math.min(...queue.map((item) => item.deleteAt));
+}
 
 export class SessionDO {
   state: DurableObjectState;
@@ -48,13 +55,16 @@ export class SessionDO {
     }
 
     log("Update received");
+    const userId = request.headers.get("x-lyriphon-user-id") ?? "unknown";
     try {
       await this.state.blockConcurrencyWhile(async () => {
-        await this.loadSession();
-        setDebug(this.debugEnabled);
-        await this.ensureBotInit();
-        await this.bot.handleUpdate(update as any);
-        await this.persistSession();
+        await runWithLogScope(userId, async () => {
+          await this.loadSession();
+          setDebug(this.debugEnabled);
+          await this.ensureBotInit();
+          await this.bot.handleUpdate(update as any);
+          await this.persistSession();
+        });
       });
     } catch (error: any) {
       // Never re-throw: a 500 makes Telegram retry the same update in a loop.
@@ -84,6 +94,12 @@ export class SessionDO {
       }
     }
 
+    // Re-arm for any remaining future items, otherwise they never fire.
+    const next = nextAlarmTime(this.deleteQueue);
+    if (next !== null && typeof (this.state as any).setAlarm === "function") {
+      await (this.state as any).setAlarm(next);
+    }
+
     await this.persistSession();
   }
 
@@ -110,7 +126,7 @@ export class SessionDO {
   scheduleDelete(chatId: number, messageId: number, delayMs: number) {
     const deleteAt = Date.now() + delayMs;
     this.deleteQueue.push({ chatId, messageId, deleteAt });
-    const next = Math.min(...this.deleteQueue.map((item) => item.deleteAt));
+    const next = nextAlarmTime(this.deleteQueue);
 
     this.state.blockConcurrencyWhile(async () => {
       await this.state.storage.put("deleteQueue", this.deleteQueue);

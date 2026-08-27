@@ -219,3 +219,19 @@ describe("combineLyricsWithTranslation", () => {
     expect(result).toBeNull();
   });
 });
+
+describe("combine CRLF and JSON validation edge cases", () => {
+  it("normalizes CRLF line endings on every line, not just the first", () => {
+    const original = "line one\r\n\r\nline two\r\nline three";
+    const result = combineLyricsFromJson(original, ["uno", "", "dos"]);
+    expect(result).not.toBeNull();
+    expect(result!.combined).not.toContain("\r");
+    expect(result!.combined).toContain("[uno]");
+    expect(result!.combined).toContain("[dos]");
+  });
+
+  it("returns null when an entry is missing t entirely", () => {
+    const json = JSON.stringify({ lines: [{ n: 1 }] });
+    expect(parseTranslationJson(json, 1)).toBeNull();
+  });
+});

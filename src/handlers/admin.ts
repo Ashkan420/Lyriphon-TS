@@ -2,7 +2,7 @@ import { Context } from "grammy";
 import { Env } from "../env";
 import { SessionDO } from "../do";
 import { SessionData } from "../session/types";
-import { formatLogsForTelegram } from "../utils/logger";
+import { formatLogsForTelegram, warn } from "../utils/logger";
 import { safeAnswer } from "../utils/telegram";
 
 // Telegram button `style` is newer than some @grammyjs/types pins; match
@@ -13,9 +13,15 @@ type AdminButton = {
   style?: "success" | "danger" | "primary";
 };
 
+let warnedMissingOwner = false;
+
 export function isBotOwner(ctx: Context, env: Env): boolean {
   if (!env.BOT_OWNER_ID) {
-    return true;
+    if (!warnedMissingOwner) {
+      warn("BOT_OWNER_ID is not set — owner commands are disabled for everyone.");
+      warnedMissingOwner = true;
+    }
+    return false;
   }
   return String(ctx.from?.id) === env.BOT_OWNER_ID;
 }

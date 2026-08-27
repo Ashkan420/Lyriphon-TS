@@ -122,7 +122,12 @@ export async function editSongPage(env: Env, pageData: TelegraphPageData, lyrics
     throw new Error(`Telegraph editPage failed ${response.status}`);
   }
 
-  return await response.json() as any;
+  const data = await response.json() as any;
+  if (!data.ok || !data.result) {
+    throw new Error(`Telegraph editPage error: ${data.error || "unknown"}`);
+  }
+
+  return data;
 }
 
 function buildPageContent(options: {

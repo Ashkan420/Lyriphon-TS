@@ -1,12 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { searchTracks, getTrack, getAlbum } from "../src/services/deezer";
+import { retryOptions } from "../src/utils/retry";
 
 function mockFetch(impl: (url: string) => Promise<Response> | Response) {
   vi.stubGlobal("fetch", vi.fn((url: any) => Promise.resolve(impl(String(url)))));
 }
 
 describe("deezer service", () => {
+  beforeEach(() => {
+    retryOptions.delayScale = 0;
+  });
+
   afterEach(() => {
+    retryOptions.delayScale = 1;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -25,12 +31,12 @@ describe("deezer service", () => {
   it("searchTracks returns null on HTTP error", async () => {
     mockFetch(() => new Response("nope", { status: 500 }));
     expect(await searchTracks("query")).toBeNull();
-  }, 30_000);
+  });
 
   it("searchTracks returns null when fetch throws", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("network"))));
     expect(await searchTracks("query")).toBeNull();
-  }, 30_000);
+  });
 
   it("getTrack returns parsed JSON on success", async () => {
     mockFetch(() => new Response(JSON.stringify({ id: 42, title: "x" }), { status: 200 }));
@@ -45,7 +51,7 @@ describe("deezer service", () => {
   it("getAlbum returns null when fetch throws", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("network"))));
     expect(await getAlbum(7)).toBeNull();
-  }, 30_000);
+  });
 
   it("searchTracks retries on 403 and succeeds", async () => {
     let callCount = 0;
@@ -59,7 +65,7 @@ describe("deezer service", () => {
     const result = await searchTracks("query");
     expect(result).toEqual([{ id: 1 }]);
     expect(callCount).toBe(2);
-  }, 15_000);
+  });
 
   it("searchTracks does not retry on 404", async () => {
     let callCount = 0;
@@ -105,7 +111,7 @@ describe("deezer service", () => {
     const result = await searchTracks("query");
     expect(result).toEqual([{ id: 1 }]);
     expect(callCount).toBe(2);
-  }, 15_000);
+  });
 
   it("searchTracks returns null on Deezer JSON error 4", async () => {
     mockFetch(() => new Response(JSON.stringify({

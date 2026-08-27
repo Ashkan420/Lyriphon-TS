@@ -244,6 +244,8 @@ Released under the **GNU Affero General Public License v3.0** (see `LICENSE`). I
 ## Configuration notes
 
 - Secrets (`BOT_TOKEN`, `TELEGRAPH_ACCESS_TOKEN`, `WEBHOOK_SECRET_TOKEN`, `GEMINI_API_KEY`, `BOT_OWNER_ID`) are set via `wrangler secret put` (prod) or `.dev.vars` (local).
+- `BOT_OWNER_ID` is optional, but owner commands (`/admin`, `/session`, `/debug`, `/logs`, `/multilingual`) are **disabled for everyone** when it is not set (fail closed).
 - `CHANNEL_LINK` and `DEEZLOAD_BOT` are hardcoded constants in `src/config.ts` — update them if you fork.
 - `TRANSLATION_PROVIDER` selects the translation backend; only `gemini` is implemented. Without `GEMINI_API_KEY`, translation and Finglish search are skipped gracefully.
+- `schema.sql` mirrors all three D1 tables (`channels`, `lyrics_cache`, `transliterations`); the db modules also create their tables lazily at runtime.
 - The Durable Object class is named `SessionDO` (see `wrangler.toml`); the D1 binding is `DB` and the DO namespace is `SESSION_DO`.

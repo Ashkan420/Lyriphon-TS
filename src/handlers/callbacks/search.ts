@@ -132,6 +132,8 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   session.telegraph.translatedLyrics = undefined;
   session.telegraph.activeLang = undefined;
   session.telegraph.translationRequestId = undefined;
+  session.telegraph.translationCooldownUntil = undefined;
+  session.telegraph.pendingTranslationLang = undefined;
   resetTranslationState(session);
 
   if (session.telegraph.languageAnalysis) {
