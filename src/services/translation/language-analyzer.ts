@@ -14,6 +14,20 @@ import { TURKISH_SOURCE } from "./prompts/sources/turkish";
 import { ITALIAN_SOURCE } from "./prompts/sources/italian";
 import { PORTUGUESE_SOURCE } from "./prompts/sources/portuguese";
 import { CHINESE_SOURCE } from "./prompts/sources/chinese";
+import { PUNJABI_SOURCE } from "./prompts/sources/punjabi";
+import { TAMIL_SOURCE } from "./prompts/sources/tamil";
+import { TELUGU_SOURCE } from "./prompts/sources/telugu";
+import { BENGALI_SOURCE } from "./prompts/sources/bengali";
+import { THAI_SOURCE } from "./prompts/sources/thai";
+import { HEBREW_SOURCE } from "./prompts/sources/hebrew";
+import { INDONESIAN_SOURCE } from "./prompts/sources/indonesian";
+import { VIETNAMESE_SOURCE } from "./prompts/sources/vietnamese";
+import { FILIPINO_SOURCE } from "./prompts/sources/filipino";
+import { GREEK_SOURCE } from "./prompts/sources/greek";
+import { POLISH_SOURCE } from "./prompts/sources/polish";
+import { SWEDISH_SOURCE } from "./prompts/sources/swedish";
+import { SERBIAN_SOURCE } from "./prompts/sources/serbian";
+import { CROATIAN_SOURCE } from "./prompts/sources/croatian";
 import { getHintFragment } from "./prompts/hints";
 
 export interface DetectedLanguage {
@@ -39,6 +53,13 @@ const FRANC_TO_CANONICAL: Record<string, string> = {
   fra: "fr", fas: "fa", pes: "fa",
   por: "pt", ara: "ar", tur: "tr", hin: "hi",
   ita: "it", rus: "ru", zho: "zh",
+  pan: "pa", tam: "ta", tel: "te", ben: "bn",
+  tha: "th", heb: "he",
+  ind: "id", zsm: "id", // Malay folds into the Indonesian prompt
+  vie: "vi",
+  fil: "tl", tgl: "tl",
+  ell: "el", pol: "pl",
+  srp: "sr", hrv: "hr", bos: "hr", // Bosnian folds into the Croatian standard
 };
 
 // excludeIf: skip the pattern when this regex matches anywhere in the text.
@@ -52,6 +73,12 @@ const SCRIPT_PATTERNS: ScriptPattern[] = [
   { regex: /[\u0900-\u097F]/, code: "hi" },
   { regex: /[\u0400-\u04FF]/, code: "ru" },
   { regex: /[\u4E00-\u9FFF]/, code: "zh", excludeIf: /[\u3040-\u30FF]/ },
+  { regex: /[\u0A00-\u0A7F]/, code: "pa" },  // Gurmukhi
+  { regex: /[\u0B80-\u0BFF]/, code: "ta" },  // Tamil
+  { regex: /[\u0C00-\u0C7F]/, code: "te" },  // Telugu
+  { regex: /[\u0980-\u09FF]/, code: "bn" },  // Bengali (incl. Assamese)
+  { regex: /[\u0E00-\u0E7F]/, code: "th" },  // Thai
+  { regex: /[\u0590-\u05FF]/, code: "he" },  // Hebrew
 ];
 
 // Persian, Arabic, and Urdu share the Arabic block (\u0600-\u06FF), so the
@@ -81,6 +108,20 @@ const SOURCE_FRAGMENTS: Record<string, string> = {
   it: ITALIAN_SOURCE,
   pt: PORTUGUESE_SOURCE,
   zh: CHINESE_SOURCE,
+  pa: PUNJABI_SOURCE,
+  ta: TAMIL_SOURCE,
+  te: TELUGU_SOURCE,
+  bn: BENGALI_SOURCE,
+  th: THAI_SOURCE,
+  he: HEBREW_SOURCE,
+  id: INDONESIAN_SOURCE,
+  vi: VIETNAMESE_SOURCE,
+  tl: FILIPINO_SOURCE,
+  el: GREEK_SOURCE,
+  pl: POLISH_SOURCE,
+  sv: SWEDISH_SOURCE,
+  sr: SERBIAN_SOURCE,
+  hr: CROATIAN_SOURCE,
 };
 
 interface ScriptResult {

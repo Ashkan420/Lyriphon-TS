@@ -3,6 +3,10 @@ export const FLAG_MAP: Record<string, string> = {
   es: "🇪🇸", fr: "🇫🇷", de: "🇩🇪", pt: "🇧🇷",
   ar: "🇸🇦", tr: "🇹🇷", hi: "🇮🇳", it: "🇮🇹",
   ru: "🇷🇺", zh: "🇨🇳",
+  pa: "🇮🇳", ta: "🇮🇳", te: "🇮🇳", bn: "🇧🇩",
+  th: "🇹🇭", he: "🇮🇱", id: "🇮🇩", vi: "🇻🇳",
+  tl: "🇵🇭", el: "🇬🇷", pl: "🇵🇱", sv: "🇸🇪",
+  sr: "🇷🇸", hr: "🇭🇷",
 };
 
 export function getFlag(code: string): string {

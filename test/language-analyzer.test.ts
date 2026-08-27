@@ -66,6 +66,69 @@ describe("analyzeLanguages", () => {
     expect(result!.primary.code).toBe("ja");
   });
 
+  it("detects Punjabi by Gurmukhi script", () => {
+    const lyrics = "ਮੈਨੂੰ ਤੇਰੀ ਲੋੜ ਹੈ ਮੈਨੂੰ ਤੇਰਾ ਪਿਆਰ ਚਾਹੀਦਾ\nਦਿਲ ਦੀਆਂ ਗੱਲਾਂ ਕਰਦੇ ਹਾਂ ਹੌਸਲਾ ਰੱਖ";
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("pa");
+  });
+
+  it("detects Tamil by script", () => {
+    const lyrics = "நிலவே நிலவே சொல்லாயே\nகாதல் கதை கேட்கிறேன் நான்";
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("ta");
+  });
+
+  it("detects Telugu by script", () => {
+    const lyrics = "నీ కళ్ళలో నేను చూశాను\nప్రేమ గీతం పాడాను నా హృదయంలో";
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("te");
+  });
+
+  it("detects Bengali by script", () => {
+    const lyrics = "আমার প্রিয় তুমি কোথায়\nমন ভরে গেছে তোমার স্মৃতিতে";
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("bn");
+  });
+
+  it("detects Thai by script", () => {
+    const lyrics = "คิดถึงเธอทุกคืนและทุกวัน\nหัวใจของฉันมีแต่เธอเสมอมา";
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("th");
+  });
+
+  it("detects Hebrew by script", () => {
+    const lyrics = "הלב שלי איתך בכל לילה\nהרוח נושבת לאט בין הצללים";
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("he");
+  });
+
+  it("detects Greek via franc", () => {
+    const lyrics = "Σ' αγαπώ και δεν μπορώ να ζω χωρίς εσένα\n".repeat(6);
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("el");
+  });
+
+  it("detects Indonesian via franc", () => {
+    const lyrics = "Aku mencintaimu dengan sepenuh hatiku\n".repeat(6);
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("id");
+  });
+
+  it("detects Polish via franc", () => {
+    const lyrics = "Kocham cię bardziej niż wczoraj i mniej niż jutro\n".repeat(6);
+    const result = analyzeLanguages(lyrics);
+    expect(result).toBeDefined();
+    expect(result!.primary.code).toBe("pl");
+  });
+
   it("falls back to franc for Latin-script languages", () => {
     const lyrics =
       "When the morning comes we will rise again\n" +

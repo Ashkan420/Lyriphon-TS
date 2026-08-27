@@ -70,6 +70,76 @@ const LANGUAGE_NOTES: Record<string, string[]> = {
     "Four-character idioms (成语) compress allusions — translate their meaning, never character-by-character.",
     "Chinese verbs carry no tense; resolve time from context and express it naturally.",
   ],
+  pa: [
+    "Translate ALL Punjabi text into the target language. Do not leave any Punjabi phrases untranslated.",
+    "Punjabi pop mixes English slang with village-folk imagery — translate embedded English consistently.",
+    "Folk refrains and vocative repetition carry the emotion; keep them intact.",
+  ],
+  ta: [
+    "Translate ALL Tamil text into the target language. Do not leave any Tamil phrases untranslated.",
+    "Agglutinative case suffixes pack meaning into word endings — unpack them into natural phrasing.",
+    "Sangam-era classical imagery carries conventional emotional weight — translate the feeling, not the literal object.",
+  ],
+  te: [
+    "Translate ALL Telugu text into the target language. Do not leave any Telugu phrases untranslated.",
+    "Film lyrics alternate between literary (grandhika) and spoken (vaaduka) registers — match the register sung.",
+    "Suffixes mark case, mood, and politeness; unpack them naturally, never literally.",
+  ],
+  bn: [
+    "Translate ALL Bengali text into the target language. Do not leave any Bengali phrases untranslated.",
+    "Rain, monsoon, river, and separation (biroho) imagery are conventional emotional codes — render their feeling.",
+    "Match literary (sadhu) vs. colloquial (cholito) registers line by line.",
+  ],
+  th: [
+    "Translate ALL Thai text into the target language. Do not leave any Thai phrases untranslated.",
+    "Politeness particles (ครับ, ค่ะ, นะ) signal mood and softness — reflect them through tone, never as words.",
+    "Pronouns are usually dropped; resolve speaker/addressee relationships from context.",
+  ],
+  he: [
+    "Translate ALL Hebrew text into the target language. Do not leave any Hebrew phrases untranslated.",
+    "Biblical allusions in secular songs keep their resonance — don't flatten them into ordinary wording.",
+    "Trilateral-root wordplay (like Arabic) conveys a shared semantic echo — render it naturally.",
+  ],
+  id: [
+    "Translate ALL Indonesian text into the target language. Do not leave any Indonesian phrases untranslated.",
+    "Poetic particles (-lah, -kah, -pun) add emphasis or softness — reflect through phrasing, never as words.",
+    "Match formal Bahasa vs. Jakarta-slang registers actually used in the song.",
+  ],
+  vi: [
+    "Translate ALL Vietnamese text into the target language. Do not leave any Vietnamese phrases untranslated.",
+    "Pronouns (anh, em, chị) encode age and relationship — convey the relationship through tone and address.",
+    "Tone-based puns rarely survive; translate the intended meaning and keep the playfulness in phrasing.",
+  ],
+  tl: [
+    "Translate ALL Filipino (Tagalog) text into the target language. Do not leave any Filipino phrases untranslated.",
+    "Taglish code-switching is expressive — translate embedded English consistently with the whole.",
+    "Respect markers (po, opo) signal deference; convey it through register, not literal markers.",
+  ],
+  el: [
+    "Translate ALL Greek text into the target language. Do not leave any Greek phrases untranslated.",
+    "Sea, exile (xenitia), and village imagery carry strong cultural nostalgia — render their feeling.",
+    "Match demotic-folk vs. entekhno art-song registers actually used.",
+  ],
+  pl: [
+    "Translate ALL Polish text into the target language. Do not leave any Polish phrases untranslated.",
+    "Perfective/imperfective aspect choice signals completion or repetition — preserve the nuance naturally.",
+    "Gendered past tense reveals the speaker — resolve gender from context.",
+  ],
+  sv: [
+    "Translate ALL Swedish text into the target language. Do not leave any Swedish phrases untranslated.",
+    "Swedish understatement and quiet melancholy must not be inflated into dramatic declarations.",
+    "Resolve homonyms (visa = song/show/visa document) from context before translating.",
+  ],
+  sr: [
+    "Translate ALL Serbian text into the target language. Do not leave any Serbian phrases untranslated.",
+    "Case-driven free word order is poetic — rebuild each line with natural target-language syntax.",
+    "Vocatives (brate, dušo) are emotional address — keep them warm and natural.",
+  ],
+  hr: [
+    "Translate ALL Croatian text into the target language. Do not leave any Croatian phrases untranslated.",
+    "Dialect color (Dalmatian etc.) is emotional flavor — translate the standard meaning.",
+    "Coastal imagery (sea, jugo wind, stone towns) carries nostalgic weight — render the feeling.",
+  ],
 };
 
 const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
@@ -86,6 +156,20 @@ const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
   it: "ITALIAN",
   pt: "PORTUGUESE",
   zh: "CHINESE",
+  pa: "PUNJABI",
+  ta: "TAMIL",
+  te: "TELUGU",
+  bn: "BENGALI",
+  th: "THAI",
+  he: "HEBREW",
+  id: "INDONESIAN",
+  vi: "VIETNAMESE",
+  tl: "FILIPINO",
+  el: "GREEK",
+  pl: "POLISH",
+  sv: "SWEDISH",
+  sr: "SERBIAN",
+  hr: "CROATIAN",
 };
 
 export function getHintFragment(code: string): string {
