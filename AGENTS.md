@@ -130,6 +130,7 @@ Bindings live in `wrangler.toml`. Prod secrets: `wrangler secret put …`.
 
 - Tests: `test/*.test.ts`, import from `../src/...`.
 - Prefer pure-function tests for `combine`, `language-analyzer`, session transitions, utils.
+- Retry/backoff tests must set `retryOptions.delayScale = 0` (`src/utils/retry.ts`, reset to `1` in afterEach) instead of long custom vitest timeouts — the suite should stay fast.
 - One small focused test when adding non-trivial logic; don't add CI unless asked (CI was declined).
 
 ## Style / change discipline
@@ -139,6 +140,7 @@ Bindings live in `wrangler.toml`. Prod secrets: `wrangler secret put …`.
 - Match local patterns: lazy `ensureTable` in db modules, `warn`/`debug` from `utils/logger`, graceful external-API failure messages.
 - Type-only imports where needed (`import type { … } from "@grammyjs/types"` for Telegram types — not always re-exported from `grammy`).
 - `findLanguage` / `SUPPORTED_LANGUAGES` / `LanguageCode` live in `services/translation/types.ts`, not `language-analyzer.ts`.
+- Logger (`utils/logger.ts`) is per-user scoped via AsyncLocalStorage — `do.ts` wraps each fetch in `runWithLogScope(userId, …)`. Never add module-level mutable state to the logger; new per-user context goes through the scope, not globals.
 
 ## Out of scope / don't propose unless asked
 
