@@ -19,6 +19,22 @@ type LrcLibTrack = {
   syncedLyrics?: string | null;
 };
 
+const LRC_TIMESTAMP_RE = /^\s*\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]\s*/;
+
+/**
+ * Convert synced LRC lyrics into displayable plain lyrics by stripping the
+ * [mm:ss.xx] timestamps from every line. Returns null when nothing readable
+ * remains (e.g. every line was pure metadata).
+ */
+function syncedToPlain(syncedLyrics: string): string | null {
+  const stripped = syncedLyrics
+    .split("\n")
+    .map((line) => line.replace(LRC_TIMESTAMP_RE, ""))
+    .join("\n")
+    .replace(/(?:^\n+|\n+$)/g, "");
+  return stripped.trim() ? stripped : null;
+}
+
 async function searchLyrics(
   track: string,
   artist: string,
@@ -63,22 +79,35 @@ async function searchLyrics(
 
   const hasPlainLyrics = (r: LrcLibTrack) =>
     Boolean(r.plainLyrics && r.plainLyrics.trim());
+  const hasSyncedLyrics = (r: LrcLibTrack) =>
+    Boolean(r.syncedLyrics && r.syncedLyrics.trim());
 
-  // Prefer exact album match
-  if (album) {
-    const albumMatch = results.find(
-      r =>
-        r.albumName?.toLowerCase() === album.toLowerCase() &&
-        hasPlainLyrics(r),
+  const pickAlbumMatch = (predicate: (r: LrcLibTrack) => boolean) => {
+    if (!album) {
+      return undefined;
+    }
+    return results.find(
+      r => r.albumName?.toLowerCase() === album.toLowerCase() && predicate(r),
     );
+  };
 
-    if (albumMatch) {
-      return albumMatch;
+  // Prefer exact album match with plain lyrics, then any result with them.
+  const plainMatch = pickAlbumMatch(hasPlainLyrics) ?? results.find(hasPlainLyrics);
+  if (plainMatch) {
+    return plainMatch;
+  }
+
+  // Nothing with plain lyrics — fall back to synced LRC lyrics with the
+  // [mm:ss.xx] timestamps stripped so pages stay readable.
+  const syncedTrack = pickAlbumMatch(hasSyncedLyrics) ?? results.find(hasSyncedLyrics);
+  if (syncedTrack) {
+    const plain = syncedToPlain(syncedTrack.syncedLyrics!);
+    if (plain) {
+      return { ...syncedTrack, plainLyrics: plain };
     }
   }
 
-  // Otherwise first result with plain lyrics
-  return results.find(hasPlainLyrics) ?? null;
+  return null;
 }
 
 export async function getLyrics(

@@ -59,7 +59,23 @@ describe("lrclib service", () => {
       syncedLyrics: "[00:00.00] Synced lyrics"
     }]), { status: 200 }))));
     const result = await getLyrics("track", "artist");
-    expect(result).toBe("[00:00.00] Synced lyrics");
+    expect(result).toBe("Synced lyrics");
+  });
+
+  it("strips LRC timestamps when falling back to syncedLyrics", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify([{
+      syncedLyrics: "[00:12.50] First line\n[01:05] Second line\n[01:30.25]"
+    }]), { status: 200 }))));
+    const result = await getLyrics("track", "artist");
+    expect(result).toBe("First line\nSecond line");
+  });
+
+  it("returns null when syncedLyrics fallback has no readable content", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify([{
+      syncedLyrics: "[00:00.00]\n[00:10.00]"
+    }]), { status: 200 }))));
+    const result = await getLyrics("track", "artist");
+    expect(result).toBeNull();
   });
 
   it("getLyrics prefers plainLyrics over syncedLyrics", async () => {
