@@ -21,6 +21,7 @@ import {
   hashString,
   tryEditSongPage,
   resetTranslationState,
+  failTranslationState,
 } from "./index";
 
 export async function handleTranslateCallback(ctx: Context, session: SessionData, env: Env) {
@@ -43,6 +44,7 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
     const buttons = buildLanguagePickerKeyboard(session);
     const msg = await ctx.reply("Select target language:", { reply_markup: { inline_keyboard: buttons } });
     session.telegraph.translateMessageId = msg.message_id;
+    session.telegraph.pendingTranslationLang = undefined;
     return;
   }
 
@@ -61,16 +63,24 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
   }
 
   if (data === "translate:retry") {
+    if (session.telegraph.isTranslating) {
+      await safeAnswer(ctx, "Translation in progress");
+      return;
+    }
     const pendingLang = session.telegraph.pendingTranslationLang;
     if (!pendingLang) {
       await safeAnswer(ctx, "No pending translation");
       return;
     }
+    const cid = chatId(ctx);
+    if (!cid) {
+      await safeAnswer(ctx);
+      return;
+    }
 
     await safeAnswer(ctx);
 
-    const pickerMsgId = session.telegraph.translateMessageId;
-    const cid = chatId(ctx);
+    let pickerMsgId = session.telegraph.translateMessageId;
     const cooldownUntil = session.telegraph.translationCooldownUntil ?? 0;
 
     if (Date.now() < cooldownUntil) {
@@ -78,8 +88,16 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
       return;
     }
 
+    // Pre-fix failures cleared translateMessageId; the status message is gone,
+    // so start a fresh one for this retry instead of editing nothing.
+    if (!pickerMsgId) {
+      const msg = await ctx.reply("🌐 Retrying translation...");
+      pickerMsgId = msg.message_id;
+      session.telegraph.translateMessageId = pickerMsgId;
+    }
+
     session.telegraph.translationCooldownUntil = undefined;
-    await executeTranslation(ctx, session, env, pendingLang, pickerMsgId, cid);
+    await applyCachedOrTranslate(ctx, session, env, pendingLang, pickerMsgId, cid);
     return;
   }
 
@@ -103,6 +121,7 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
       return;
     }
     session.telegraph.activeLang = "original";
+    session.telegraph.pendingTranslationLang = undefined;
     const msgId = session.telegraph.translateMessageId;
     const cid = chatId(ctx);
     if (msgId && cid) {
@@ -153,37 +172,69 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
       return;
     }
 
-    const originalHash = hashString(originalLyrics);
-    const cacheKey = `${langCode}:${originalHash}`;
-    const cached = session.telegraph.translatedLyrics?.[cacheKey];
     const pickerMsgId = session.telegraph.translateMessageId;
     const cid = chatId(ctx);
 
-    if (cached) {
-      const originalLineCount = originalLyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
-      const parsedLines = parseTranslationJson(cached.text, originalLineCount);
-      if (parsedLines) {
-        const result = combineLyricsFromJson(originalLyrics, parsedLines.split("\n"));
-        if (result) {
-          const lastData = session.telegraph.data as any;
-          if (lastData) {
-            if (!(await tryEditSongPage(env, lastData, result.combined, "cached translation"))) {
-              await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Failed to update Telegraph page");
-              return;
-            }
-          }
-          session.telegraph.activeLang = langCode;
-          await safeEdit(ctx.api, cid!, pickerMsgId!, `✅ ${language.name} lyrics added. `);
-          session.telegraph.translateMessageId = undefined;
-          return;
-        }
-      }
-      // parse failed or combine returned null → fall through to fresh translation
-    }
-
-    await executeTranslation(ctx, session, env, langCode, pickerMsgId, cid);
+    await applyCachedOrTranslate(ctx, session, env, langCode, pickerMsgId, cid);
     return;
   }
+}
+
+// Cache-hit path shared by the language picker and translate:retry: when a
+// valid translation is already cached for this lang + lyrics, re-apply it to
+// the Telegraph page without a second Gemini call; otherwise run a fresh
+// executeTranslation.
+async function applyCachedOrTranslate(
+  ctx: Context,
+  session: SessionData,
+  env: Env,
+  langCode: string,
+  pickerMsgId: number | undefined,
+  cid: number | undefined,
+) {
+  const language = findLanguage(langCode);
+  if (!language) return;
+
+  const originalLyrics = session.telegraph.originalLyrics;
+  if (!originalLyrics) {
+    if (cid && pickerMsgId) {
+      await safeEdit(ctx.api, cid, pickerMsgId, "❌ No lyrics to translate.");
+    }
+    return;
+  }
+
+  const originalHash = hashString(originalLyrics);
+  const cacheKey = `${langCode}:${originalHash}`;
+  const cached = session.telegraph.translatedLyrics?.[cacheKey];
+
+  if (cached) {
+    const originalLineCount = originalLyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
+    const parsedLines = parseTranslationJson(cached.text, originalLineCount);
+    if (parsedLines) {
+      const result = combineLyricsFromJson(originalLyrics, parsedLines.split("\n"));
+      if (result) {
+        const lastData = session.telegraph.data as any;
+        if (lastData) {
+          if (!(await tryEditSongPage(env, lastData, result.combined, "cached translation"))) {
+            if (cid && pickerMsgId) {
+              await safeEdit(ctx.api, cid, pickerMsgId, "❌ Failed to update Telegraph page");
+            }
+            return;
+          }
+        }
+        session.telegraph.activeLang = langCode;
+        session.telegraph.pendingTranslationLang = undefined;
+        if (cid && pickerMsgId) {
+          await safeEdit(ctx.api, cid, pickerMsgId, `✅ ${language.name} lyrics added. `);
+        }
+        session.telegraph.translateMessageId = undefined;
+        return;
+      }
+    }
+    // parse failed or combine returned null → fall through to fresh translation
+  }
+
+  await executeTranslation(ctx, session, env, langCode, pickerMsgId, cid);
 }
 
 async function showRateLimitCooldown(
@@ -196,7 +247,7 @@ async function showRateLimitCooldown(
   if (pickerMsgId && cid) {
     await safeEdit(ctx.api, cid, pickerMsgId,
       `⏳ Gemini is rate-limited.\nPlease wait ${remaining}s and try again.`,
-      { inline_keyboard: buildRateLimitKeyboard() });
+      { inline_keyboard: buildRetryKeyboard() });
   }
 }
 
@@ -278,14 +329,15 @@ async function executeTranslation(
   }
 
   if (snapshotOriginal !== session.telegraph.originalLyrics) {
+    session.telegraph.pendingTranslationLang = undefined;
     resetTranslationState(session);
     await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Session changed during translation. Try again.");
     return;
   }
 
   if (attempt.kind !== "json") {
-    resetTranslationState(session);
-    await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Translation failed. try again later.");
+    failTranslationState(session);
+    await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Translation failed. Please try again.", { inline_keyboard: buildRetryKeyboard() });
     return;
   }
 
@@ -341,9 +393,9 @@ async function executeTranslation(
 
     if (!combined) {
       delete session.telegraph.translatedLyrics[cacheKey];
-      resetTranslationState(session);
+      failTranslationState(session);
       warn("translation retry also failed to produce valid output");
-      await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Translation format error — try again");
+      await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Translation format error — try again", { inline_keyboard: buildRetryKeyboard() });
       return;
     }
   }
@@ -351,18 +403,19 @@ async function executeTranslation(
   const lastData = session.telegraph.data as any;
   if (lastData) {
     if (!(await tryEditSongPage(env, lastData, combined, "after translation"))) {
-      resetTranslationState(session);
-      await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Failed to update Telegraph page");
+      failTranslationState(session);
+      await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Failed to update Telegraph page", { inline_keyboard: buildRetryKeyboard() });
       return;
     }
   }
 
   session.telegraph.activeLang = langCode;
+  session.telegraph.pendingTranslationLang = undefined;
   resetTranslationState(session);
   await safeEdit(ctx.api, cid!, pickerMsgId!, `✅ Lyrics translated to ${language.name}`);
 }
 
-function buildRateLimitKeyboard(): InlineKeyboardButton[][] {
+function buildRetryKeyboard(): InlineKeyboardButton[][] {
   return [
     [
       { text: "🔄 Retry", callback_data: "translate:retry" },

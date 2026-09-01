@@ -44,6 +44,14 @@ export function resetTranslationState(session: SessionData) {
   session.telegraph.translateMessageId = undefined;
 }
 
+// Translation failed but the status message carries a Retry button: keep
+// translateMessageId + pendingTranslationLang so translate:retry can re-run
+// the attempt against the same message.
+export function failTranslationState(session: SessionData) {
+  session.telegraph.isTranslating = false;
+  session.telegraph.translationCooldownUntil = undefined;
+}
+
 export function getDisplayLyrics(session: SessionData): string | null {
   const { originalLyrics, translatedLyrics, activeLang } = session.telegraph;
 
