@@ -42,9 +42,11 @@ Bot webhook ──file_id from reply_to_message──▶ sendAudio(requester) + 
    - `/bridge_status` → session stored / client connected
    The MTProto session string is persisted in the DO's storage and survives
    restarts; login is a one-time step.
-5. **Enable:** `/admin` → toggle **🎧 Auto-fetch: ON**.
+5. **Enable:** `/admin` → toggle **🎧 Auto-fetch: ON** (users can opt out
+   per-user via `/settings`).
 6. **Test:** `/song <name>` → pick a track → the audio arrives in the
-   requesting chat ~15–60 s later with the Lyrics button.
+   requesting chat ~15–60 s later with the Lyrics button, followed by the
+   channel-send prompt if the requester has registered channels.
 
 ## The bridge DM (BRIDGE_CHAT_ID)
 
@@ -57,11 +59,25 @@ forwards deezload's audio into its own DM with the bot.
 
 ## Notes
 
-- Only **one** login at a time; the DO rejects new jobs while busy
-  (`error: busy`) — the D1 row then expires via its normal TTL.
+- Jobs run through a **persisted FIFO queue** (cap `AUTOFETCH_MAX_QUEUE`,
+  default 10). When a job is running, new picks queue behind it and their
+  "queued" notice reports the position; the queue-full case answers
+  `queue_full` and the D1 row expires via its normal TTL.
+- Auto-fetch is gated three ways: the admin global toggle (`/admin`), each
+  user's own `/settings` preference (default on), and the three bridge
+  secrets being configured. Tracks with a stored `file_id` skip the bridge
+  entirely (instant re-send from the tracks store).
+- The "🎧 Auto-fetch queued" notice deletes itself when the job reaches a
+  terminal state (delivered or failed). Failures notify the requester with
+  a `t.me/deezload2bot?start=deezerttrack<id>` fallback link.
 - The userbot account should be a spare account: logging in from a
   datacenter IP can, in rare cases, trigger Telegram's security review.
 - `wrangler.toml [alias]` maps node builtins teleproto never uses on this
-  path (fs, path, os, net, zlib, …) to `src/bridge/node_shims.ts`, which
-  throws loudly if anything touches them. `crypto` is intentionally not
-  aliased — workerd's native `node:crypto` is the real AES/hash hot path.
+  path (fs, path, os, net, events, util, node-localstorage) to
+  `src/bridge/node_shims.ts`, which throws loudly if anything touches them.
+  `crypto` and `zlib` are intentionally NOT aliased — workerd's native
+  `node:crypto`/`node:zlib` are the real hot paths (AES/hashes; GZIPPacked's
+  `unzipSync` for compressed MTProto responses).
+- `/bridge_reset` is the escape hatch for a wedged pipeline: it clears the
+  auth flow AND expires all pending `audio_requests` (freeing the per-user
+  pending cap).

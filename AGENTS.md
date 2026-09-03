@@ -1,6 +1,6 @@
 # AGENTS.md — Lyriphon-TS
 
-Guidance for coding agents working in this repo. Prefer this over guessing; `README.md` is user-facing and partly stale on layout.
+Guidance for coding agents working in this repo. Prefer this over guessing; `README.md` is user-facing, this file is agent-facing.
 
 ## What this is
 
@@ -91,7 +91,7 @@ Do **not** reintroduce a monolith `handlers/callbacks.ts`.
    Do **not** reorder, prune, or "fix" names. Before editing `MODELS` in any
    way, re-read `gemini.ts` — this list is a snapshot; the code is the source
    of truth.
-6. **D1 lyrics cache** (`src/db/lyrics.ts`): key = Deezer `track_id`. Cache **only when lyrics found**. Never cache empty/"not found".
+6. **Tracks store lyrics** (`src/db/tracks.ts`): key = Deezer `track_id`. Cache **only when lyrics found**. Never cache empty/"not found". `lyrics_cache` is gone (dropped by migration 0004; superseded by `tracks`).
 7. **Translation combine** (`combine.ts`): returns `CombineResult | null` (`{ combined, mismatch }`). Mismatch degrades to original + separator + translation; `translate.ts` may retry once. Don't revert to hard-null-on-mismatch.
 8. **Owner commands** gated by `BOT_OWNER_ID`: `/admin` (settings panel with debug/multilingual toggles + logs), `/session`, `/debug`, `/logs`, `/multilingual` (and related callbacks). Fail closed when `BOT_OWNER_ID` is unset — owner commands are disabled for everyone.
 9. **Optional Gemini:** missing `GEMINI_API_KEY` → translation/Finglish degrade gracefully, don't crash.
@@ -113,10 +113,16 @@ Do **not** reintroduce a monolith `handlers/callbacks.ts`.
    (`track_id, title, artist, file_id, lyrics`). A stored `file_id` means
    "already fetched": track picks re-send it instantly instead of hitting
    the bridge, and the attach decision button relabels to 🔁 Replace Audio.
-   `lyrics_cache` is legacy (read-only, backfilled into `tracks` by
-   migration 0003). BridgeDO jobs run through a persisted FIFO (cap
+   Upserts are partial-safe (`COALESCE`); never blank fields on partial
+   writes. BridgeDO jobs run through a persisted FIFO (cap
    `AUTOFETCH_MAX_QUEUE`), so concurrent track picks queue with a reported
    position instead of being dropped.
+12. **Auto-fetch gating is three-way:** effective = admin global toggle
+   (`/admin` → settings KV `autofetch_enabled`) AND per-user pref
+   (`/settings` → `pref_autofetch:<uid>`, default on) AND the user not
+   having provided their own audio AND no stored file. The same effective
+   gate governs **both** the bridge enqueue and the cached-audio reuse —
+   keep them in sync (see `autoGetForUser` in `callbacks/search.ts`).
 
 ## Env / secrets
 
@@ -136,6 +142,7 @@ From `.dev.vars.example` / `Env`:
 | `GEMINI_API_KEY`         |    no    | translation + Finglish |
 | `DB`                     | binding  | D1                     |
 | `SESSION_DO`             | binding  | DO namespace           |
+| `BRIDGE_DO`              | binding  | DO namespace (bridge)  |
 
 Bindings live in `wrangler.toml`. Prod secrets: `wrangler secret put …`.
 
@@ -179,14 +186,17 @@ Bindings live in `wrangler.toml`. Prod secrets: `wrangler secret put …`.
 
 ## Quick "where do I change X?"
 
-| Goal                   | Start here                                           |
-|------------------------|------------------------------------------------------|
-| Webhook / routing      | `src/index.ts`                                       |
-| New command            | `src/bot.ts` + `src/handlers/`                       |
-| Callback button        | `src/handlers/callbacks/dispatcher.ts` + domain file |
-| Session shape / modes  | `src/session/types.ts`, `transitions.ts`, `flows.ts` |
-| Deezer / lyrics / page | `services/deezer.ts`, `lrclib.ts`, `telegraph.ts`    |
-| Translate / Finglish   | `services/translation/*`                             |
-| D1 cache/tables        | `src/db/*`                                           |
-| Timeouts / constants   | `src/config.ts`                                      |
-| Owner admin panel      | `src/handlers/admin.ts` (`/admin`)                   |
+| Goal                       | Start here                                             |
+|----------------------------|--------------------------------------------------------|
+| Webhook / routing          | `src/index.ts`                                         |
+| New command                | `src/bot.ts` + `src/handlers/`                         |
+| Callback button            | `src/handlers/callbacks/dispatcher.ts` + domain file   |
+| Session shape / modes      | `src/session/types.ts`, `transitions.ts`, `flows.ts`   |
+| Deezer / lyrics / page     | `services/deezer.ts`, `lrclib.ts`, `telegraph.ts`      |
+| Translate / Finglish       | `services/translation/*`                               |
+| D1 tables                  | `src/db/*` (tracks, channels, transliterations, settings, audioRequests) |
+| Bridge delivery / queue    | `src/handlers/bridge.ts`, `src/doBridge.ts`, `src/bridge/` |
+| Bridge login / setup       | `src/bot.ts` (`/bridge_*` commands), `bridge/README.md` |
+| User settings              | `src/handlers/settings.ts` (`/settings`)               |
+| Timeouts / constants       | `src/config.ts`                                        |
+| Owner admin panel          | `src/handlers/admin.ts` (`/admin`)                     |

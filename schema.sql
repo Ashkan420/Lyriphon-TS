@@ -44,8 +44,8 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 -- Unified per-song store (see src/db/tracks.ts): metadata + canonical
--- Telegram file_id + lyrics. Backfilled one-time from lyrics_cache, which
--- is LEGACY — kept in D1 as backup; new writes go to tracks only.
+-- Telegram file_id + lyrics. Lyrics were backfilled one-time from the legacy
+-- lyrics_cache (dropped in migration 0004).
 CREATE TABLE IF NOT EXISTS tracks (
   track_id INTEGER PRIMARY KEY,
   title TEXT,
