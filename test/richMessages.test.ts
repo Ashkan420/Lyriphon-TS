@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   escapeRichHtml,
   countLyricLines,
@@ -6,7 +6,6 @@ import {
   buildTrackResultHtml,
   TrackProgressReporter,
 } from "../src/utils/richMessages";
-import { setUserRichButtonEnabled, isUserRichButtonEnabled } from "../src/db/settings";
 
 describe("escapeRichHtml", () => {
   it("escapes HTML-significant characters", () => {
@@ -287,52 +286,5 @@ describe("TrackProgressReporter", () => {
     expect(calls).toEqual([
       { method: "editMessageText", args: [1, 777, "❌ boom"] },
     ]);
-  });
-});
-
-describe("rich button setting", () => {
-  // Same KV stub pattern as test/settings.test.ts.
-  function fakeKvDb() {
-    const kv = new Map<string, string>();
-    return {
-      kv,
-      prepare(sql: string) {
-        return {
-          bind(key: string, value?: string) {
-            return {
-              async first<T>(): Promise<T | null> {
-                if (sql.includes("SELECT value FROM settings")) {
-                  const v = kv.get(key as string);
-                  return v === undefined ? null : ({ value: v } as unknown as T);
-                }
-                return null;
-              },
-              async all() { return { results: [] }; },
-              async run() {
-                if (sql.includes("INSERT INTO settings") && value !== undefined) {
-                  kv.set(key as string, value);
-                }
-              },
-            };
-          },
-          async all() { return { results: [] }; },
-          async run() {},
-        };
-      },
-    } as unknown as any;
-  }
-
-  let db: any;
-  beforeEach(() => {
-    db = fakeKvDb();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-  });
-
-  it("defaults to OFF and persists flips", async () => {
-    expect(await isUserRichButtonEnabled(db, "u1")).toBe(false);
-    await setUserRichButtonEnabled(db, "u1", true);
-    expect(await isUserRichButtonEnabled(db, "u1")).toBe(true);
-    await setUserRichButtonEnabled(db, "u1", false);
-    expect(await isUserRichButtonEnabled(db, "u1")).toBe(false);
   });
 });

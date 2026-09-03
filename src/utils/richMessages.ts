@@ -259,17 +259,6 @@ export class TrackProgressReporter {
   }
 }
 
-// Experimental styled rich button. Older Telegram clients don't render it at
-// all, so it is opt-in via the "Fancy lyrics buttons" setting (default off);
-// the default path is a regular inline-keyboard URL button.
-function telegraphButtonRowHtml(url: string, label: string): string {
-  return (
-    `<tg-button-row align="center">` +
-      `<tg-button type="url" style="primary" url="${escapeRichHtml(url)}">${label}</tg-button>` +
-    `</tg-button-row>`
-  );
-}
-
 // The persisted result: old-style HTML card. The Telegraph link is a plain
 // hyperlink and the album cover comes from Telegram's native link preview,
 // so edits to the page (cover, lyrics) are reflected by the preview instead
@@ -300,24 +289,4 @@ export function buildTrackResultHtml(options: {
   body += `👇 Edit options below — or tap to open the page:\n<a href="${esc(options.telegraphUrl)}">📖 Open Telegraph Page</a>`;
 
   return body;
-}
-
-// One-line rich message with just the styled Telegraph button, sent under a
-// music file when the "Fancy lyrics buttons" setting is on (the audio
-// message itself can't carry tg-buttons — captions have no rich content).
-export async function sendRichTelegraphButton(
-  api: Api<RawApi>,
-  chatId: number,
-  url: string,
-): Promise<boolean> {
-  try {
-    await api.sendRichMessage(chatId, {
-      html: telegraphButtonRowHtml(url, "📖 Lyrics"),
-      skip_entity_detection: true,
-    });
-    return true;
-  } catch (error) {
-    warn("rich telegraph button send failed", error);
-    return false;
-  }
 }

@@ -26,8 +26,7 @@ import {
   setRequestStatus,
   expireStalePending,
 } from "../db/audioRequests";
-import { getSetting, setSetting, SETTING_BRIDGE_LAST_AUDIO, SETTING_PENDING_SEND_PREFIX, isUserRichButtonEnabled } from "../db/settings";
-import { sendRichTelegraphButton } from "../utils/richMessages";
+import { getSetting, setSetting, SETTING_BRIDGE_LAST_AUDIO, SETTING_PENDING_SEND_PREFIX } from "../db/settings";
 import { AUTOFETCH_REQUEST_TTL_SECONDS } from "../config";
 import { setTrackFileId } from "../db/tracks";
 import { getUserChannels } from "../db/channels";
@@ -153,21 +152,11 @@ async function deliverFile(env: Env, audio: any, token: string): Promise<void> {
     : `>\`${escapeMd(trackName)} — ${escapeMd(artistName)}\``;
 
   const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
-  // Fancy mode (opt-in): skip the regular Lyrics keyboard button — the
-  // styled rich button rides as a one-line message right after the file.
-  let fancyButton = false;
-  if (row.telegraph_url) {
-    try {
-      fancyButton = await isUserRichButtonEnabled(env.DB, row.user_id);
-    } catch (error) {
-      warn("bridge: rich button preference lookup failed", error);
-    }
-  }
   try {
     await api.sendAudio(row.chat_id, audio.file_id, {
       caption,
       parse_mode: "MarkdownV2",
-      reply_markup: row.telegraph_url && !fancyButton
+      reply_markup: row.telegraph_url
         ? { inline_keyboard: [[{ text: "Lyrics", url: row.telegraph_url }]] }
         : undefined,
     });
@@ -180,13 +169,6 @@ async function deliverFile(env: Env, audio: any, token: string): Promise<void> {
   }
 
   await setRequestStatus(env.DB, token, "delivered");
-  if (fancyButton && row.telegraph_url) {
-    try {
-      await sendRichTelegraphButton(api, row.chat_id, row.telegraph_url);
-    } catch (error) {
-      warn("bridge: rich telegraph button failed", error);
-    }
-  }
   // Canonical file_id for the tracks store — enables reuse + Replace Audio.
   try {
     await setTrackFileId(env.DB, row.track_id, audio.file_id);

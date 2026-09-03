@@ -12,10 +12,8 @@ import {
   isAutoFetchEnabled,
   isUserAutoFetchEnabled,
   getUserLinkPreviewEnabled,
-  isUserRichButtonEnabled,
   setUserAutoFetchEnabled,
   setUserLinkPreviewEnabled,
-  setUserRichButtonEnabled,
 } from "../db/settings";
 import { safeAnswer } from "../utils/telegram";
 import { warn } from "../utils/logger";
@@ -32,7 +30,6 @@ export function buildSettingsText(
   autoFetchOn: boolean,
   globalDisabled: boolean,
   previewsOn: boolean,
-  richButtonOn: boolean,
 ): string {
   const lines = [
     "⚙️ <b>Your settings</b>",
@@ -44,10 +41,6 @@ export function buildSettingsText(
     previewsOn
       ? "🔗 Link previews: <b>on</b> — I show a preview card when I post a lyrics page link."
       : "🔗 Link previews: <b>off</b> — lyrics page links are posted without a preview card.",
-    "",
-    richButtonOn
-      ? "🧪 Fancy lyrics buttons: <b>on</b> — lyrics page links get a big styled button. Experimental: only the newest Telegram apps show it."
-      : "🧪 Fancy lyrics buttons: <b>off</b> — lyrics page links use regular buttons that work everywhere.",
   ];
 
   if (globalDisabled) {
@@ -65,7 +58,6 @@ export function buildSettingsKeyboard(
   autoFetchOn: boolean,
   globalDisabled: boolean,
   previewsOn: boolean,
-  richButtonOn: boolean,
 ): SettingsButton[][] {
   const rows: SettingsButton[][] = [
     [
@@ -82,26 +74,18 @@ export function buildSettingsKeyboard(
         style: previewsOn ? "success" : "danger",
       },
     ],
-    [
-      {
-        text: richButtonOn ? "🧪 Fancy lyrics buttons: ON" : "🧪 Fancy lyrics buttons: OFF",
-        callback_data: "settings_toggle_rich_button",
-        style: richButtonOn ? "success" : "danger",
-      },
-    ],
   ];
   void globalDisabled; // keyboard is the same either way; text carries the notice
   return rows;
 }
 
 async function readPrefs(env: Env, userId: string) {
-  const [globalOn, userAuto, previews, richButton] = await Promise.all([
+  const [globalOn, userAuto, previews] = await Promise.all([
     isAutoFetchEnabled(env.DB).catch(() => false),
     isUserAutoFetchEnabled(env.DB, userId),
     getUserLinkPreviewEnabled(env.DB, userId),
-    isUserRichButtonEnabled(env.DB, userId),
   ]);
-  return { autoFetchOn: globalOn && userAuto, globalDisabled: !globalOn, previewsOn: previews, richButtonOn: richButton };
+  return { autoFetchOn: globalOn && userAuto, globalDisabled: !globalOn, previewsOn: previews };
 }
 
 export async function handleSettingsCommand(ctx: Context, env: Env): Promise<void> {
@@ -109,9 +93,9 @@ export async function handleSettingsCommand(ctx: Context, env: Env): Promise<voi
   if (!userId) return;
   try {
     const prefs = await readPrefs(env, userId);
-    await ctx.reply(buildSettingsText(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn, prefs.richButtonOn), {
+    await ctx.reply(buildSettingsText(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn), {
       parse_mode: "HTML",
-      reply_markup: { inline_keyboard: buildSettingsKeyboard(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn, prefs.richButtonOn) as any },
+      reply_markup: { inline_keyboard: buildSettingsKeyboard(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn) as any },
     });
   } catch (error) {
     warn("settings: command failed", error);
@@ -136,9 +120,6 @@ export async function handleSettingsCallback(ctx: Context, env: Env): Promise<vo
     } else if (data === "settings_toggle_preview") {
       const previewsOn = await getUserLinkPreviewEnabled(env.DB, userId);
       await setUserLinkPreviewEnabled(env.DB, userId, !previewsOn);
-    } else if (data === "settings_toggle_rich_button") {
-      const richButtonOn = await isUserRichButtonEnabled(env.DB, userId);
-      await setUserRichButtonEnabled(env.DB, userId, !richButtonOn);
     } else {
       return;
     }
@@ -153,9 +134,9 @@ export async function handleSettingsCallback(ctx: Context, env: Env): Promise<vo
   // Re-render from fresh state.
   try {
     const prefs = await readPrefs(env, userId);
-    await ctx.editMessageText(buildSettingsText(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn, prefs.richButtonOn), {
+    await ctx.editMessageText(buildSettingsText(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn), {
       parse_mode: "HTML",
-      reply_markup: { inline_keyboard: buildSettingsKeyboard(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn, prefs.richButtonOn) as any },
+      reply_markup: { inline_keyboard: buildSettingsKeyboard(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn) as any },
     });
   } catch {
     // Ignore "message is not modified" edit races.
