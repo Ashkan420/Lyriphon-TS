@@ -1,13 +1,15 @@
 import { Context } from "grammy";
 import { searchTracks } from "../services/deezer";
+import { Env } from "../env";
 import { SessionData, SessionMode } from "../session/types";
 import { clearAudioState } from "../session/flows";
 import { inMode, transition } from "../session/transitions";
 import { searchAndShowResults, clearSendChannelPrompt } from "../utils/telegram";
 import { log } from "../utils/logger";
 import { buildTrackButtons } from "./songSearch";
+import { hasTrackFile } from "../db/tracks";
 
-export async function handleMusicFile(ctx: Context, session: SessionData) {
+export async function handleMusicFile(ctx: Context, session: SessionData, env: Env) {
   const message = ctx.message;
   const chatId = ctx.chat?.id;
   if (!message || !chatId) {
@@ -58,10 +60,16 @@ export async function handleMusicFile(ctx: Context, session: SessionData) {
 
     await transition(session, SessionMode.AUDIO_DECISION, ctx.api, chatId);
 
+    // When the store already holds a file for this track, attaching swaps
+    // the audio in — relabel so the user knows what will happen.
+    const trackId = (lastData as any)?.trackId;
+    const hasStoredAudio = trackId ? await hasTrackFile(env.DB, trackId) : false;
+    const attachLabel = hasStoredAudio ? "🔁 Replace Audio" : "📎 Attach to Current Telegraph";
+
     await ctx.reply("🎵 What would you like to do with this file?", {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "📎 Attach to Current Telegraph", callback_data: "audio_decision_attach" }],
+          [{ text: attachLabel, callback_data: "audio_decision_attach" }],
           [{ text: "🔍 Search Using This File", callback_data: "audio_decision_search" }],
           [{ text: "❌ Cancel", callback_data: "audio_decision_cancel" }],
         ],

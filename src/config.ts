@@ -21,3 +21,5 @@ export const AUTOFETCH_REQUEST_TTL_SECONDS = 7200;
 // Hard cap for one bridge job (deezload wait + forward); the DO alarm
 // watchdog fails jobs that exceed it.
 export const AUTOFETCH_JOB_TIMEOUT_MS = 240000;
+// Max jobs waiting in BridgeDO's FIFO before new enqueues are rejected.
+export const AUTOFETCH_MAX_QUEUE = 10;

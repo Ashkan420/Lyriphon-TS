@@ -25,10 +25,11 @@ import {
   BridgeJobs,
   AuthOutcome,
 } from "./bridge/client";
-import { AUTOFETCH_JOB_TIMEOUT_MS } from "./config";
+import { AUTOFETCH_JOB_TIMEOUT_MS, AUTOFETCH_MAX_QUEUE } from "./config";
 
 const DO_STORAGE_SESSION = "bridge:session";
 const DO_STORAGE_JOB = "bridge:currentJob";
+const DO_STORAGE_QUEUE = "bridge:queue";
 
 type CurrentJob = {
   token: string;
@@ -44,6 +45,8 @@ export class BridgeDO {
   private auth: BridgeAuth;
   private jobs: BridgeJobs;
   private processing = false;
+  private queue: CurrentJob[] = [];
+  private queueLoaded = false;
   private botUsername: string | undefined;
 
   constructor(state: DurableObjectState, env: Env) {
@@ -209,7 +212,19 @@ export class BridgeDO {
     });
   }
 
-  // ── Job queue ───────────────────────────────────────────────────────────────
+  // ── Job queue (bounded FIFO, persisted) ────────────────────────────────────
+
+  private async loadQueue(): Promise<CurrentJob[]> {
+    if (!this.queueLoaded) {
+      this.queue = (await this.state.storage.get<CurrentJob[]>(DO_STORAGE_QUEUE)) ?? [];
+      this.queueLoaded = true;
+    }
+    return this.queue;
+  }
+
+  private async persistQueue(): Promise<void> {
+    await this.state.storage.put(DO_STORAGE_QUEUE, this.queue);
+  }
 
   private async handleEnqueue(request: Request): Promise<Response> {
     const body = (await request.json()) as { token: string; trackId: number; chatId: number };
@@ -217,11 +232,10 @@ export class BridgeDO {
       return Response.json({ ok: false, error: "missing fields" });
     }
 
-    if (this.processing) {
-      // Serial: one deezload request in flight keeps file association
-      // correct. Busy = reject; the D1 row expires via its TTL.
-      log("BridgeDO: busy, rejecting job", body.token);
-      return Response.json({ ok: false, error: "busy" });
+    const queue = await this.loadQueue();
+    if (queue.length >= AUTOFETCH_MAX_QUEUE) {
+      log("BridgeDO: queue full, rejecting job", body.token);
+      return Response.json({ ok: false, error: "queue_full" });
     }
 
     const job: CurrentJob = {
@@ -230,15 +244,31 @@ export class BridgeDO {
       chatId: body.chatId,
       startedAt: Date.now(),
     };
+    queue.push(job);
+    await this.persistQueue();
+
+    // position = jobs ahead in queue + (1 if something is running now) + 1
+    const position = queue.length + (this.processing ? 1 : 0);
+    log("BridgeDO: job queued", JSON.stringify({ token: body.token, trackId: body.trackId, position }));
+
+    this.state.waitUntil(this.pump());
+    return Response.json({ ok: true, position });
+  }
+
+  // Start the next queued job if nothing is running. Serial execution is
+  // what keeps deezload's file↔token pairing correct.
+  private async pump(): Promise<void> {
+    if (this.processing) return;
+    const queue = await this.loadQueue();
+    const job = queue.shift();
+    if (!job) return;
+    await this.persistQueue();
 
     this.processing = true;
     await this.state.storage.put(DO_STORAGE_JOB, job);
     await this.armWatchdog(job);
-    log("BridgeDO: job accepted", JSON.stringify({ token: body.token, trackId: body.trackId }));
-
-    // Run in the background; the fetch returns immediately.
+    log("BridgeDO: job started", JSON.stringify({ token: job.token, trackId: job.trackId }));
     this.state.waitUntil(this.runJob(job));
-    return Response.json({ ok: true });
   }
 
   private async runJob(job: CurrentJob): Promise<void> {
@@ -256,6 +286,8 @@ export class BridgeDO {
       this.processing = false;
       await this.state.storage.delete(DO_STORAGE_JOB);
       await this.disarmWatchdog();
+      // Serial pipeline: kick off the next queued job.
+      this.state.waitUntil(this.pump());
     }
   }
 
@@ -266,6 +298,14 @@ export class BridgeDO {
       const row = await getRequestByToken(this.env.DB, token);
       if (!row || row.status !== "pending" || isRequestExpired(row)) return;
       await setRequestStatus(this.env.DB, token, "failed");
+      if (row.queued_msg_id) {
+        try {
+          const api = await this.botApi();
+          await api.deleteMessage(row.chat_id, row.queued_msg_id);
+        } catch (deleteError) {
+          warn("BridgeDO: failed to delete queued notice", deleteError);
+        }
+      }
       const api = await this.botApi();
       await api.sendMessage(
         row.chat_id,
@@ -297,6 +337,8 @@ export class BridgeDO {
     this.processing = false;
     await this.state.storage.delete(DO_STORAGE_JOB);
     await this.failRequestDirectly(job.token, "job timeout");
+    // Keep the queue moving after a watchdog kill.
+    this.state.waitUntil(this.pump());
   }
 }
 

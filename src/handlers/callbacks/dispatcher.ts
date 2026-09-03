@@ -49,7 +49,7 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
   }
 
   if (data.startsWith("send_channel_")) {
-    await handleSendToChannelCallback(ctx, session);
+    await handleSendToChannelCallback(ctx, session, env);
     return;
   }
 

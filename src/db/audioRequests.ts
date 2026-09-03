@@ -16,6 +16,7 @@ export type AudioRequestRow = {
   track_title: string | null;
   artist_name: string | null;
   telegraph_url: string | null;
+  queued_msg_id: number | null;
   status: AudioRequestStatus;
   created_at: number;
   updated_at: number;
@@ -27,6 +28,12 @@ async function ensureTable(db: D1Database) {
   if (tableReady) return;
   try {
     await db.prepare("SELECT 1 FROM audio_requests LIMIT 1").all();
+    // Table predates queued_msg_id — add it idempotently.
+    try {
+      await db.prepare("SELECT queued_msg_id FROM audio_requests LIMIT 1").all();
+    } catch {
+      await db.prepare("ALTER TABLE audio_requests ADD COLUMN queued_msg_id INTEGER").run();
+    }
     tableReady = true;
   } catch {
     await db.prepare(`
@@ -39,6 +46,7 @@ async function ensureTable(db: D1Database) {
         track_title TEXT,
         artist_name TEXT,
         telegraph_url TEXT,
+        queued_msg_id INTEGER,
         status TEXT NOT NULL DEFAULT 'pending',
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
         updated_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -73,7 +81,7 @@ export async function getRequestByToken(db: D1Database, reqToken: string): Promi
   await ensureTable(db);
   const row = await db.prepare(`
     SELECT id, req_token, user_id, chat_id, track_id, track_title, artist_name,
-           telegraph_url, status, created_at, updated_at
+           telegraph_url, queued_msg_id, status, created_at, updated_at
     FROM audio_requests WHERE req_token = ?
   `)
     .bind(reqToken)
@@ -97,6 +105,15 @@ export async function setRequestTelegraphUrl(db: D1Database, reqToken: string, t
     UPDATE audio_requests SET telegraph_url = ?, updated_at = unixepoch() WHERE req_token = ?
   `)
     .bind(telegraphUrl, reqToken)
+    .run();
+}
+
+export async function setRequestQueuedMsg(db: D1Database, reqToken: string, messageId: number): Promise<void> {
+  await ensureTable(db);
+  await db.prepare(`
+    UPDATE audio_requests SET queued_msg_id = ?, updated_at = unixepoch() WHERE req_token = ?
+  `)
+    .bind(messageId, reqToken)
     .run();
 }
 

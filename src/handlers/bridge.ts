@@ -26,8 +26,12 @@ import {
   setRequestStatus,
   expireStalePending,
 } from "../db/audioRequests";
-import { getSetting, setSetting, SETTING_BRIDGE_LAST_AUDIO } from "../db/settings";
+import { getSetting, setSetting, SETTING_BRIDGE_LAST_AUDIO, SETTING_PENDING_SEND_PREFIX } from "../db/settings";
 import { AUTOFETCH_REQUEST_TTL_SECONDS } from "../config";
+import { setTrackFileId } from "../db/tracks";
+import { getUserChannels } from "../db/channels";
+
+const PENDING_SEND_PREFIX = SETTING_PENDING_SEND_PREFIX;
 
 // Pairing cache: the DO forwards the audio first, then sends the lyq:file tag
 // as a separate message. reply_to_message proved unreliable (Telegram dropped
@@ -159,11 +163,21 @@ async function deliverFile(env: Env, audio: any, token: string): Promise<void> {
   } catch (error) {
     warn("bridge: sendAudio to requester failed", { chatId: row.chat_id, token }, error);
     await setRequestStatus(env.DB, token, "failed");
+    await deleteQueuedMsg(env, row);
     await notifyRequester(env, row, `❌ Couldn't deliver the audio. Grab it from deezload: ${deezloadLink(row)}`);
     return;
   }
 
   await setRequestStatus(env.DB, token, "delivered");
+  // Canonical file_id for the tracks store — enables reuse + Replace Audio.
+  try {
+    await setTrackFileId(env.DB, row.track_id, audio.file_id);
+  } catch (error) {
+    warn("bridge: failed to store track file_id", error);
+  }
+  await deleteQueuedMsg(env, row);
+  await stashPendingSend(env, row, audio.file_id, caption);
+  await promptChannelSend(env, row);
   log("bridge: delivered", JSON.stringify({ token, chatId: row.chat_id, trackId: row.track_id }));
 }
 
@@ -172,11 +186,83 @@ async function reportFailure(env: Env, token: string): Promise<void> {
   if (!row) return;
 
   await setRequestStatus(env.DB, token, "failed");
+  await deleteQueuedMsg(env, row);
   await notifyRequester(
     env,
     row,
     `❌ Couldn't fetch this track automatically. Grab it from deezload: ${deezloadLink(row)}`,
   );
+}
+
+// The 🎧 queued notice self-destructs once the job reaches a terminal state.
+async function deleteQueuedMsg(env: Env, row: AudioRequestRow): Promise<void> {
+  if (!row.queued_msg_id) return;
+  try {
+    const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
+    await api.deleteMessage(row.chat_id, row.queued_msg_id);
+  } catch (error) {
+    warn("bridge: failed to delete queued notice", error);
+  }
+}
+
+// Session-free pending-send stash: the requester's SessionDO never learns
+// about bridge deliveries, but send_channel_ clicks need the audio context.
+// handleSendToChannelCallback falls back to this when session fields are
+// empty (bridge/README parity: one pending send per user, 1 h freshness).
+type PendingSend = { fileId: string; caption: string; telegraphUrl: string | null; ts: number };
+
+async function stashPendingSend(env: Env, row: AudioRequestRow, fileId: string, caption: string): Promise<void> {
+  try {
+    await setSetting(
+      env.DB,
+      `${PENDING_SEND_PREFIX}${row.user_id}`,
+      JSON.stringify({ fileId, caption, telegraphUrl: row.telegraph_url, ts: Date.now() } satisfies PendingSend),
+    );
+  } catch (error) {
+    warn("bridge: failed to stash pending send", error);
+  }
+}
+
+export async function takePendingSend(env: Env, userId: string): Promise<PendingSend | null> {
+  try {
+    const key = `${PENDING_SEND_PREFIX}${userId}`;
+    const raw = await getSetting(env.DB, key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingSend;
+    if (!parsed.fileId || !parsed.caption || Date.now() - parsed.ts > 3600_000) {
+      await setSetting(env.DB, key, "");
+      return null;
+    }
+    return parsed;
+  } catch (error) {
+    warn("bridge: failed to read pending send", error);
+    return null;
+  }
+}
+
+export async function clearPendingSend(env: Env, userId: string): Promise<void> {
+  try {
+    await setSetting(env.DB, `${PENDING_SEND_PREFIX}${userId}`, "");
+  } catch (error) {
+    warn("bridge: failed to clear pending send", error);
+  }
+}
+
+// Mirror of attachAudioAndPromptChannel's prompt, for session-free delivery.
+async function promptChannelSend(env: Env, row: AudioRequestRow): Promise<void> {
+  try {
+    const channels = await getUserChannels(env.DB, row.user_id);
+    if (!channels.length) return;
+    const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
+    const channelButtons = channels.map((ch) => [
+      { text: ch.title ?? ch.channel_id, callback_data: `send_channel_${ch.channel_id}` },
+    ]);
+    await api.sendMessage(row.chat_id, "Send to which channel?", {
+      reply_markup: { inline_keyboard: channelButtons },
+    });
+  } catch (error) {
+    warn("bridge: failed to prompt channel send", error);
+  }
 }
 
 async function lookupPendingRow(env: Env, token: string): Promise<AudioRequestRow | null> {

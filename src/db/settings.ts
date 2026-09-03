@@ -30,6 +30,11 @@ export const SETTING_AUTOFETCH_ENABLED = "autofetch_enabled";
 // jobs make the pairing safe (see src/handlers/bridge.ts).
 export const SETTING_BRIDGE_LAST_AUDIO = "bridge_last_audio";
 
+// Prefix for per-user session-free pending channel-send context, stashed by
+// bridge delivery and consumed by send_channel_ clicks (key:
+// <prefix><user_id>, 1 h freshness).
+export const SETTING_PENDING_SEND_PREFIX = "bridge_pending_send:";
+
 export async function getSetting(db: D1Database, key: string): Promise<string | null> {
   await ensureTable(db);
   const row = await db.prepare("SELECT value FROM settings WHERE key = ?")

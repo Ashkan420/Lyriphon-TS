@@ -8,6 +8,8 @@ import { SessionData } from "../../session/types";
 import { Env } from "../../env";
 import { searchTracks } from "../../services/deezer";
 import { chatId } from "./index";
+import { takePendingSend, clearPendingSend } from "../bridge";
+import { setTrackFileId } from "../../db/tracks";
 
 export async function handleAudioDecisionCallback(ctx: Context, session: SessionData, env: Env) {
   const data = ctx.callbackQuery?.data;
@@ -52,6 +54,15 @@ export async function handleAudioDecisionCallback(ctx: Context, session: Session
       return;
     }
 
+    // The attached file becomes canonical for this track (Replace/Attach).
+    if (typeof lastData.trackId === "number") {
+      try {
+        await setTrackFileId(env.DB, lastData.trackId, fileId);
+      } catch (error) {
+        warn("audio attach: failed to store track file_id", error);
+      }
+    }
+
     session.telegraph.url = undefined;
     if (isStale(session, captureVersion(session))) {
       return;
@@ -90,7 +101,7 @@ export async function handleAudioDecisionCallback(ctx: Context, session: Session
   }
 }
 
-export async function handleSendToChannelCallback(ctx: Context, session: SessionData) {
+export async function handleSendToChannelCallback(ctx: Context, session: SessionData, env: Env) {
   const data = ctx.callbackQuery?.data;
   if (!data || !data.startsWith("send_channel_")) {
     return;
@@ -98,9 +109,20 @@ export async function handleSendToChannelCallback(ctx: Context, session: Session
 
   await safeAnswer(ctx);
   const channelId = data.replace("send_channel_", "");
-  const audioFileId = session.audio.pendingFileId;
-  const caption = session.audio.pendingCaption;
-  const telegraphUrl = session.audio.pendingTelegraphUrl;
+  let audioFileId = session.audio.pendingFileId;
+  let caption = session.audio.pendingCaption;
+  let telegraphUrl = session.audio.pendingTelegraphUrl;
+
+  // Bridge deliveries bypass the requester's SessionDO, so session fields
+  // are empty for them — fall back to the D1 pending-send stash.
+  if (!audioFileId || !caption || !telegraphUrl) {
+    const stashed = await takePendingSend(env, String(ctx.from?.id ?? ""));
+    if (stashed) {
+      audioFileId = stashed.fileId;
+      caption = stashed.caption;
+      telegraphUrl = stashed.telegraphUrl ?? undefined;
+    }
+  }
 
   if (!audioFileId || !caption || !telegraphUrl) {
     await ctx.editMessageText("❌ Nothing to send.");
@@ -138,4 +160,5 @@ export async function handleSendToChannelCallback(ctx: Context, session: Session
   session.audio.pendingCaption = undefined;
   session.audio.pendingTelegraphUrl = undefined;
   session.audio.sendChannelPromptId = undefined;
+  await clearPendingSend(env, String(ctx.from?.id ?? ""));
 }

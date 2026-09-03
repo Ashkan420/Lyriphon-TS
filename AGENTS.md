@@ -47,7 +47,7 @@ Telegram POST /webhook
 | `src/handlers/callbacks/` | Package: track pick, edit, translate, channel send, logs                   |
 | `src/session/`            | FSM: `types`, `flows`, `transitions` (`VALID_TRANSITIONS`, version bump)   |
 | `src/services/`           | Deezer, LRCLIB, Telegraph, translation/                                    |
-| `src/db/`                 | D1: `channels`, `transliterations`, `lyrics`, `settings`, `audioRequests`  |
+| `src/db/`                 | D1: `channels`, `transliterations`, `tracks`, `settings`, `audioRequests`  |
 | `src/doBridge.ts`         | `BridgeDO` — teleproto userbot in a DO (deezload relay, serial queue)      |
 | `src/bridge/`             | teleproto integration: sockets transport, client/auth/jobs wrappers, node shims |
 | `bridge/`                 | Docs for the in-Worker bridge (no runtime code)                            |
@@ -109,6 +109,14 @@ Do **not** reintroduce a monolith `handlers/callbacks.ts`.
    Node builtins teleproto doesn't use on this path are aliased to
    `src/bridge/node_shims.ts` in `wrangler.toml [alias]`; `crypto` must stay
    unaliased (workerd's native `node:crypto` is the hot path).
+11. **Tracks store:** `src/db/tracks.ts` is the unified per-song table
+   (`track_id, title, artist, file_id, lyrics`). A stored `file_id` means
+   "already fetched": track picks re-send it instantly instead of hitting
+   the bridge, and the attach decision button relabels to 🔁 Replace Audio.
+   `lyrics_cache` is legacy (read-only, backfilled into `tracks` by
+   migration 0003). BridgeDO jobs run through a persisted FIFO (cap
+   `AUTOFETCH_MAX_QUEUE`), so concurrent track picks queue with a reported
+   position instead of being dropped.
 
 ## Env / secrets
 

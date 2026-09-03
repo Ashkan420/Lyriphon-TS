@@ -80,7 +80,7 @@ describe("BridgeDO", () => {
     expect(state.waitUntil).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a second job while one is in flight (serial queue)", async () => {
+  it("queues a second job while one is in flight, reporting position 2", async () => {
     const state = fakeState();
     const dof = new BridgeDO(state, fakeEnv());
 
@@ -89,13 +89,37 @@ describe("BridgeDO", () => {
     const runJobSpy = vi.spyOn(dof as any, "runJob").mockReturnValue(blocked);
 
     const first = await dof.fetch(enqueueRequest({ token: "tok-1", trackId: 42, chatId: 555 }));
-    expect((await first.json() as any).ok).toBe(true);
+    const firstBody = await first.json() as any;
+    expect(firstBody.ok).toBe(true);
+    expect(firstBody.position).toBe(1);
 
     const second = await dof.fetch(enqueueRequest({ token: "tok-2", trackId: 43, chatId: 556 }));
-    const body = await second.json() as any;
-    expect(body.ok).toBe(false);
-    expect(body.error).toBe("busy");
+    const secondBody = await second.json() as any;
+    expect(secondBody.ok).toBe(true);
+    expect(secondBody.position).toBe(2);
+    expect(state.storage.put).toHaveBeenCalledWith(
+      "bridge:queue",
+      expect.arrayContaining([expect.objectContaining({ token: "tok-2" })]),
+    );
     runJobSpy.mockRestore();
+  });
+
+  it("rejects when the queue is full", async () => {
+    const state = fakeState();
+    const dof = new BridgeDO(state, fakeEnv());
+
+    // Pre-fill the queue past the cap.
+    const { AUTOFETCH_MAX_QUEUE } = await import("../src/config");
+    const full: any[] = [];
+    for (let i = 0; i < AUTOFETCH_MAX_QUEUE; i++) {
+      full.push({ token: `tok-${i}`, trackId: i, chatId: 1, startedAt: Date.now() });
+    }
+    state.store.set("bridge:queue", full);
+
+    const res = await dof.fetch(enqueueRequest({ token: "tok-new", trackId: 99, chatId: 2 }));
+    const body = await res.json() as any;
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("queue_full");
   });
 
   it("rejects malformed enqueue payloads", async () => {

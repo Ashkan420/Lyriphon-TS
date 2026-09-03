@@ -261,7 +261,7 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
 
   bot.on("message:audio", async (ctx) => {
     const session = getSession(sessionDo.sessionData);
-    await handleMusicFile(ctx, session);
+    await handleMusicFile(ctx, session, env);
   });
 
   bot.on("inline_query", async (ctx) => {

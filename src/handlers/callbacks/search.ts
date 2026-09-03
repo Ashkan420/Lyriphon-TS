@@ -2,7 +2,7 @@ import { Context } from "grammy";
 import { getTrack, getAlbum } from "../../services/deezer";
 import { getLyrics } from "../../services/lrclib";
 import { createSongTelegraph } from "../../services/telegraph";
-import { getCachedLyrics, cacheLyrics } from "../../db/lyrics";
+import { getTrackRecord, upsertTrack, setTrackFileId } from "../../db/tracks";
 import { safeAnswer, safeDelete, attachAudioAndPromptChannel } from "../../utils/telegram";
 import { log, previewText, warn } from "../../utils/logger";
 import {
@@ -20,6 +20,7 @@ import {
   countPendingByUser,
   createAudioRequest,
   setRequestTelegraphUrl,
+  setRequestQueuedMsg,
   expireStalePending,
 } from "../../db/audioRequests";
 
@@ -56,19 +57,25 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   const albumCoverUrl = trackData.album?.cover_xl ?? trackData.album?.cover_big ?? "";
   log("track pipeline: resolved", JSON.stringify({ trackId, trackName, artistName, albumName }));
 
+  // Track store record — known before anything else so lyrics come from the
+  // store, and a stored file_id skips the bridge entirely.
+  const trackRecord = await getTrackRecord(env.DB, trackId);
+
   // Auto-fetch via the deezload bridge — queued as soon as the song id is
-  // known. Best-effort; failure just means the user fetches it themselves.
+  // known, but only for songs we don't already have a file for. The 🎧
+  // message is deferred until after the Telegraph result (it needs the
+  // result to exist so the audio arrives into a complete presentation).
   const requesterId = String(ctx.from?.id ?? "");
   const requesterChatId = ctx.chat?.id;
-  if (requesterChatId) {
-    const token = await enqueueAutoFetch(
+  let queuedPosition: number | undefined;
+  const shouldAutoFetch = requesterChatId && !trackRecord?.file_id;
+  if (shouldAutoFetch) {
+    const queued = await enqueueAutoFetch(
       env, requesterId, requesterChatId, trackId, trackName, artistName,
     );
-    if (token) {
-      session.telegraph.bridgeReqToken = token;
-      try {
-        await ctx.reply("🎧 Auto-fetch queued — the file will arrive here when ready.");
-      } catch {}
+    if (queued) {
+      session.telegraph.bridgeReqToken = queued.token;
+      queuedPosition = queued.position;
     }
   }
 
@@ -81,10 +88,14 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     }
   }
 
-  const cached = await getCachedLyrics(env.DB, trackId);
+  const cached = trackRecord?.lyrics ?? null;
   let lyrics: string;
   if (cached !== null) {
     lyrics = cached;
+    // Heal backfilled rows: fill metadata the legacy table never had.
+    if (!trackRecord?.title || !trackRecord?.artist) {
+      await upsertTrack(env.DB, { trackId, title: trackName, artist: artistName });
+    }
     log(
       "track pipeline: lyrics cache HIT for track",
       trackId,
@@ -107,7 +118,8 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
       albumName,
     )) ?? "";
     if (lyrics) {
-      await cacheLyrics(env.DB, trackId, lyrics);
+      // Title/artist ride along so backfilled rows heal over time.
+      await upsertTrack(env.DB, { trackId, title: trackName, artist: artistName, lyrics });
       log("track pipeline: lyrics cached for track", trackId);
     } else {
       log(
@@ -240,6 +252,40 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     }
   }
 
+  // Deferred auto-fetch notice: after the result, so it sits below the
+  // Telegraph card; its id is persisted for self-deletion on delivery.
+  if (session.telegraph.bridgeReqToken && queuedPosition) {
+    try {
+      const note = await ctx.api.sendMessage(
+        chatId,
+        `🎧 Auto-fetch queued${queuedPosition > 1 ? ` (position ${queuedPosition})` : ""} — the file will arrive here when ready.`,
+      );
+      await setRequestQueuedMsg(env.DB, session.telegraph.bridgeReqToken, note.message_id);
+    } catch (error) {
+      warn("autofetch: failed to send queued notice", error);
+    }
+  }
+
+  // Already have this song's file? Re-send it now — no deezload round-trip.
+  if (!hasAudio && trackRecord?.file_id) {
+    log("track pipeline: reusing stored audio for track", trackId);
+    const caption = await attachAudioAndPromptChannel(
+      ctx.api,
+      env.DB,
+      chatId,
+      requesterId,
+      session,
+      trackRecord.file_id,
+      telegraphResult.url,
+      trackName,
+      artistName,
+    );
+    if (caption) {
+      clearAudioState(session);
+      session.telegraph.url = undefined;
+    }
+  }
+
   // Attach audio and prompt channel AFTER sending Telegraph result
   if (hasAudio && pendingAudioFileId) {
     const caption = await attachAudioAndPromptChannel(
@@ -260,6 +306,13 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
       return;
     }
 
+    // The user's chosen file becomes the canonical one for this track.
+    try {
+      await setTrackFileId(env.DB, trackId, pendingAudioFileId);
+    } catch (error) {
+      warn("track pipeline: failed to store audio file_id", error);
+    }
+
     if (ctx.chat?.id && session.audio.messageId) {
       await safeDelete(ctx.api as any, ctx.chat.id, session.audio.messageId);
     }
@@ -270,8 +323,8 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
 }
 
 // Enqueue a deezload auto-fetch job for this track, best-effort: any failure
-// (toggle off, D1 error, bridge chat unconfigured, Telegram flood) must not
-// break the normal track pipeline. Returns the request token on success.
+// (toggle off, D1 error, bridge unconfigured, queue full) must not break the
+// normal track pipeline. Returns the request token and queue position.
 async function enqueueAutoFetch(
   env: Env,
   userId: string,
@@ -279,7 +332,7 @@ async function enqueueAutoFetch(
   trackId: number,
   trackName: string,
   artistName: string,
-): Promise<string | undefined> {
+): Promise<{ token: string; position: number } | undefined> {
   try {
     if (!env.BRIDGE_CHAT_ID || !env.TELEGRAM_API_ID || !env.TELEGRAM_API_HASH) {
       return undefined;
@@ -305,25 +358,25 @@ async function enqueueAutoFetch(
       trackTitle: trackName,
       artistName,
     });
-    await sendBridgeJob(env, token, trackId, chatId);
-    log("autofetch: job queued", JSON.stringify({ trackId, token }));
-    return token;
+    const position = await sendBridgeJob(env, token, trackId, chatId);
+    log("autofetch: job queued", JSON.stringify({ trackId, token, position }));
+    return { token, position };
   } catch (error) {
     warn("autofetch: enqueue failed", error);
     return undefined;
   }
 }
 
-// Hand the job to BridgeDO (teleproto userbot). Busy DO = reject; the D1 row
-// stays pending until TTL expiry.
-async function sendBridgeJob(env: Env, token: string, trackId: number, chatId: number): Promise<void> {
+// Hand the job to BridgeDO. Returns the reported queue position (1 = next).
+async function sendBridgeJob(env: Env, token: string, trackId: number, chatId: number): Promise<number> {
   const stub = env.BRIDGE_DO.get(env.BRIDGE_DO.idFromName("bridge"));
   const res = await stub.fetch("https://bridge/enqueue", {
     method: "POST",
     body: JSON.stringify({ token, trackId, chatId }),
   });
-  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; position?: number };
   if (!body.ok) {
     throw new Error(`bridge rejected job: ${body.error ?? res.status}`);
   }
+  return body.position ?? 1;
 }

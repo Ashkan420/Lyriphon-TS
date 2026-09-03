@@ -12,6 +12,7 @@ vi.mock("grammy", async (importOriginal) => {
     constructor(_token: string) {}
     sendMessage = (...args: any[]) => apiMethods.sendMessage(...args);
     sendAudio = (...args: any[]) => apiMethods.sendAudio(...args);
+    deleteMessage = (...args: any[]) => apiMethods.deleteMessage?.(...args);
   }
   return { ...actual, Api: MockApi };
 });
@@ -29,6 +30,7 @@ function row(overrides: Partial<AudioRequestRow> = {}): AudioRequestRow {
     track_title: "Song",
     artist_name: "Artist",
     telegraph_url: "https://telegra.ph/abc",
+    queued_msg_id: null,
     status: "pending",
     created_at: now - 60,
     updated_at: now - 60,
@@ -72,13 +74,18 @@ function fakeD1(existing: AudioRequestRow | null) {
 }
 
 // fakeD1 variant with a working KV store for the settings table (SELECT by
-// key returns the stored value; INSERT ON CONFLICT writes it). Everything
-// else behaves like fakeD1.
-function fakeD1WithKv(existing: AudioRequestRow | null, kv: Map<string, string>) {
+// key returns the stored value; INSERT ON CONFLICT writes it) and a channels
+// table for the channel-prompt path. Everything else behaves like fakeD1.
+function fakeD1WithKv(
+  existing: AudioRequestRow | null,
+  kv: Map<string, string>,
+  opts: { channels?: Array<{ channel_id: string; title: string | null }> } = {},
+) {
   const base = fakeD1(existing) as any;
   const innerPrepare = base.prepare.bind(base);
   return {
     ...base,
+    statements: base.statements,
     prepare(sql: string) {
       // settings SELECT: SELECT value FROM settings WHERE key = ?
       if (sql.includes("SELECT value FROM settings")) {
@@ -102,6 +109,21 @@ function fakeD1WithKv(existing: AudioRequestRow | null, kv: Map<string, string>)
                 kv.set(key, value);
               },
             };
+          },
+        };
+      }
+      // channels listing
+      if (sql.includes("FROM channels")) {
+        return {
+          bind() {
+            return {
+              async all(): Promise<{ results: any[] }> {
+                return { results: opts.channels ?? [] };
+              },
+            };
+          },
+          async all(): Promise<{ results: any[] }> {
+            return { results: opts.channels ?? [] };
           },
         };
       }
@@ -297,6 +319,54 @@ describe("handleBridgeUpdate", () => {
     const [chatId, text] = sendMessage.mock.calls[0];
     expect(chatId).toBe(555);
     expect(text).toContain("deezload2bot?start=deezerttrack64321156");
+  });
+
+  it("stashes pending-send context and prompts channels after delivery", async () => {
+    const sendAudio = vi.fn(async (..._args: any[]) => {});
+    const sendMessage = vi.fn(async (..._args: any[]) => ({ message_id: 9 }));
+    apiMethods.sendAudio = sendAudio;
+    apiMethods.sendMessage = sendMessage;
+    const kv = new Map<string, string>();
+    const db = fakeD1WithKv(row(), kv, { channels: [{ channel_id: "-100123", title: "My Channel" }] });
+
+    await handleBridgeUpdate(makeEnv(db), bridgeUpdate({
+      caption: undefined,
+      audio: undefined,
+      text: `lyq:file req=${TOKEN}`,
+      reply_to_message: { audio: { file_id: "forwarded-file-id" } },
+    }));
+
+    // requester gets the audio AND the channel prompt
+    expect(sendAudio).toHaveBeenCalledTimes(1);
+    const promptCall = sendMessage.mock.calls.find((c: any[]) => c[1] === "Send to which channel?");
+    expect(promptCall).toBeDefined();
+    expect(JSON.stringify(promptCall?.[2])).toContain("send_channel_-100123");
+    // pending-send stash written for the user
+    const stash = kv.get("bridge_pending_send:user-1");
+    expect(stash).toBeDefined();
+    const parsed = JSON.parse(stash!);
+    expect(parsed.fileId).toBe("forwarded-file-id");
+    expect(parsed.telegraphUrl).toBe("https://telegra.ph/abc");
+  });
+
+  it("deletes the queued notice on failure", async () => {
+    const sendMessage = vi.fn(async (..._args: any[]) => ({}));
+    const deleteMessage = vi.fn(async (..._args: any[]) => ({}));
+    apiMethods.sendMessage = sendMessage;
+    apiMethods.deleteMessage = deleteMessage;
+    const kv = new Map<string, string>();
+    const db = fakeD1WithKv(row({ queued_msg_id: 4242, telegraph_url: null }), kv);
+
+    await handleBridgeUpdate(makeEnv(db), bridgeUpdate({
+      caption: undefined,
+      audio: undefined,
+      text: `lyq:fail req=${TOKEN} timeout`,
+    }));
+
+    // queued notice deleted, failure notify fires
+    expect(deleteMessage).toHaveBeenCalledWith(555, 4242);
+    const notify = sendMessage.mock.calls.find((c: any[]) => String(c[1]).includes("Couldn't fetch"));
+    expect(notify).toBeDefined();
   });
 
   it("swallows internal errors without throwing (Telegram would redeliver on 500)", async () => {

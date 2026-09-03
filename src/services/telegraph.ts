@@ -22,6 +22,7 @@ export interface TelegraphPageData {
   albumCoverUrl: string;
   releaseDate: string;
   path: string;
+  trackId?: number;
 }
 
 export async function createSongTelegraph(env: Env, options: {
@@ -88,6 +89,7 @@ export async function createSongTelegraph(env: Env, options: {
       albumCoverUrl,
       releaseDate,
       path: data.result.path,
+      trackId,
     } as TelegraphPageData,
   };
 }

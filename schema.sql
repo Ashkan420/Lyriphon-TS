@@ -47,3 +47,17 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
+
+-- Unified per-song store (see src/db/tracks.ts): metadata + canonical
+-- Telegram file_id + lyrics. Backfilled one-time from lyrics_cache, which
+-- is LEGACY — kept in D1 as backup; new writes go to tracks only.
+CREATE TABLE IF NOT EXISTS tracks (
+  track_id INTEGER PRIMARY KEY,
+  title TEXT,
+  artist TEXT,
+  file_id TEXT,
+  lyrics TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_tracks_title_artist ON tracks(artist, title);
