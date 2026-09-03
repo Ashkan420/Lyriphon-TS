@@ -69,8 +69,13 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   const requesterId = String(ctx.from?.id ?? "");
   const requesterChatId = ctx.chat?.id;
   const userProvidedAudio = Boolean(session.audio.fileId);
+  // Effective auto-get = admin global switch AND the user's own preference
+  // (/settings). Governs both the bridge AND the cache reuse below.
+  const autoGetForUser = requesterChatId
+    && (await isAutoFetchEnabled(env.DB).catch(() => false))
+    && (await isUserAutoFetchEnabled(env.DB, requesterId));
   let queuedPosition: number | undefined;
-  const shouldAutoFetch = requesterChatId && !trackRecord?.file_id && !userProvidedAudio;
+  const shouldAutoFetch = autoGetForUser && !trackRecord?.file_id && !userProvidedAudio;
   if (shouldAutoFetch) {
     const queued = await enqueueAutoFetch(
       env, requesterId, requesterChatId, trackId, trackName, artistName,
@@ -276,10 +281,10 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     }
   }
 
-  // Already have this song's file (and the user didn't bring their own)?
-  // Re-send it now — no deezload round-trip. The telegraph stays live so
-  // the user can still send another file to replace it.
-  if (!hasAudio && trackRecord?.file_id) {
+  // Already have this song's file (and the user didn't bring their own, and
+  // auto-get is on for them)? Re-send it — no deezload round-trip. The
+  // telegraph stays live so the user can still send another file to replace.
+  if (autoGetForUser && !hasAudio && trackRecord?.file_id) {
     log("track pipeline: reusing stored audio for track", trackId);
     const caption = await attachAudioAndPromptChannel(
       ctx.api,
