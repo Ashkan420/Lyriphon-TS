@@ -4,6 +4,12 @@ import { getLyrics } from "../../services/lrclib";
 import { createSongTelegraph } from "../../services/telegraph";
 import { getTrackRecord, upsertTrack, setTrackFileId } from "../../db/tracks";
 import { safeAnswer, safeDelete, attachAudioAndPromptChannel } from "../../utils/telegram";
+import {
+  TrackProgressReporter,
+  buildTrackResultRichHtml,
+  sendRichTrackResult,
+  countLyricLines,
+} from "../../utils/richMessages";
 import { log, previewText, warn } from "../../utils/logger";
 import {
   captureVersion,
@@ -41,11 +47,26 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   session.search.results = undefined;
   session.search.page = 0;
 
-  try { await ctx.editMessageText("⏳ Fetching track info..."); } catch { return; }
+  const chatId = ctx.chat?.id;
+  if (!chatId) {
+    return;
+  }
+  const baseMessageId = ctx.callbackQuery?.message?.message_id;
+  const progress = new TrackProgressReporter(
+    ctx.api,
+    chatId,
+    baseMessageId,
+    ctx.chat?.type === "private",
+  );
+
+  await progress.update({ stage: "info" });
+  if (progress.isDead) {
+    return;
+  }
   const trackData = await getTrack(trackId) as any;
   if (!trackData) {
     log("track pipeline: failed to fetch Deezer track", trackId);
-    try { await ctx.editMessageText("❌ Failed to fetch track info. Try again later."); } catch {}
+    await progress.fail("❌ Failed to fetch track info. Try again later.");
     return;
   }
 
@@ -56,6 +77,8 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   const albumId = trackData.album?.id;
   const albumCoverUrl = trackData.album?.cover_xl ?? trackData.album?.cover_big ?? "";
   log("track pipeline: resolved", JSON.stringify({ trackId, trackName, artistName, albumName }));
+
+  await progress.update({ stage: "metadata", trackName, artistName });
 
   // Track store record — known before anything else so lyrics come from the
   // store, and a stored file_id skips the bridge entirely.
@@ -88,17 +111,19 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
 
   let releaseDate = "Unknown";
   if (albumId) {
-    try { await ctx.editMessageText("⏳ Fetching metadata..."); } catch {}
     const albumInfo = await getAlbum(albumId);
     if (albumInfo) {
       releaseDate = (albumInfo as any).release_date ?? "Unknown";
     }
   }
+  await progress.update({ stage: "lyrics", albumName, releaseDate });
 
   const cached = trackRecord?.lyrics ?? null;
   let lyrics: string;
+  let lyricLineCount = 0;
   if (cached !== null) {
     lyrics = cached;
+    lyricLineCount = countLyricLines(lyrics);
     // Heal backfilled rows: fill metadata the legacy table never had.
     if (!trackRecord?.title || !trackRecord?.artist) {
       await upsertTrack(env.DB, { trackId, title: trackName, artist: artistName });
@@ -115,16 +140,13 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
       JSON.stringify({ trackName, artistName, albumName }),
     );
 
-    try {
-      await ctx.editMessageText("⏳ Fetching lyrics...");
-    } catch {}
-
     lyrics = (await getLyrics(
       trackName,
       artistName,
       albumName,
     )) ?? "";
     if (lyrics) {
+      lyricLineCount = countLyricLines(lyrics);
       // Title/artist ride along so backfilled rows heal over time.
       await upsertTrack(env.DB, { trackId, title: trackName, artist: artistName, lyrics });
       log("track pipeline: lyrics cached for track", trackId);
@@ -138,7 +160,12 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   }
   const authorName = ctx.from?.first_name ?? "Unknown User";
 
-  try { await ctx.editMessageText("⏳ Creating Telegraph page..."); } catch {}
+  await progress.update({
+    stage: "telegraph",
+    lyricsNote: lyrics
+      ? `${lyricLineCount} line${lyricLineCount === 1 ? "" : "s"}${cached !== null ? " (cached)" : ""}`
+      : "not found",
+  });
   let telegraphResult;
   try {
     telegraphResult = await createSongTelegraph(env, {
@@ -156,7 +183,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     log("track pipeline: Telegraph created", telegraphResult.url, lyrics ? `(lyrics ${lyrics.length} chars)` : "(no lyrics)");
   } catch (error) {
     warn("Failed to create Telegraph page for track", trackName, error);
-    await ctx.editMessageText("❌ Failed to create Telegraph page. Try again later.");
+    await progress.fail("❌ Failed to create Telegraph page. Try again later.");
     return;
   }
 
@@ -206,47 +233,51 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   const status = hasAudio ? "Telegraph Created & Audio Attached" : "Telegraph Created";
   const extra = hasAudio ? "" : "Send a music file to attach the Lyrics button to it.\n\n";
 
+  // Plain-HTML fallback if sendRichMessage is rejected by the API.
   const replyText = `✅ <b>${status}</b>\n\n<blockquote>🎵 <b>${(trackName)}</b>\n👤 ${(artistName)}\n💽 ${(albumName)}\n📅 ${(releaseDate)}</blockquote>\n\n${extra}👇 Edit options below — or tap to open the page:\n<a href="${telegraphResult.url}">📖 Open Telegraph Page</a>`;
 
-  const chatId = ctx.chat?.id;
-  if (!chatId) {
-    // Fallback to edit if no chat id
-    try {
-      await ctx.editMessageText(replyText, {
-        parse_mode: "HTML",
-        reply_markup: { inline_keyboard: buildEditMenu() },
-      });
-    } catch (error) {
-      warn("Failed to edit message with final result", error);
-    }
-    return;
-  }
-
-  // Respect the user's link-preview preference (via /settings) on the
-  // result message — the only place a Telegraph link renders as a card.
+  // Respect the user's link-preview preference (via /settings): on the rich
+  // card it decides whether the album cover is embedded; on the plain
+  // fallback it keeps controlling the Telegraph link preview card.
   const showPreviews = await getUserLinkPreviewEnabled(env.DB, requesterId).catch(() => true);
   const previewOption = { link_preview_options: { is_disabled: !showPreviews } } as any;
 
-  // Try to send new message with confetti effect
-  try {
-    await ctx.api.sendMessage(chatId, replyText, {
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: buildEditMenu() },
-      message_effect_id: MESSAGE_EFFECT_CONFETTI,
-      ...previewOption,
-    });
+  const editMenuMarkup = { inline_keyboard: buildEditMenu() };
+  const richHtml = buildTrackResultRichHtml({
+    trackName,
+    artistName,
+    albumName,
+    releaseDate,
+    durationSeconds: trackData.duration,
+    telegraphUrl: telegraphResult.url,
+    lyricLineCount,
+    authorName,
+    coverUrl: albumCoverUrl,
+    includeCover: showPreviews,
+    hasAudio,
+  });
+
+  const sentRich = await sendRichTrackResult(
+    ctx.api,
+    chatId,
+    richHtml,
+    editMenuMarkup,
+    MESSAGE_EFFECT_CONFETTI,
+  );
+  if (sentRich) {
     // Delete the progress message on success
     const messageId = ctx.callbackQuery?.message?.message_id;
     if (messageId) {
       await safeDelete(ctx.api, chatId, messageId);
     }
-  } catch (error) {
+  } else {
     // Confetti effect might fail (non-private chat or API rejection)
     // Fall back to sending without effect
     try {
       await ctx.api.sendMessage(chatId, replyText, {
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: buildEditMenu() },
+        reply_markup: editMenuMarkup,
+        message_effect_id: MESSAGE_EFFECT_CONFETTI,
         ...previewOption,
       });
       const messageId = ctx.callbackQuery?.message?.message_id;
@@ -256,13 +287,25 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     } catch (fallbackError) {
       // If send fails too, try to edit the existing message
       try {
-        await ctx.editMessageText(replyText, {
+        await ctx.api.sendMessage(chatId, replyText, {
           parse_mode: "HTML",
-          reply_markup: { inline_keyboard: buildEditMenu() },
+          reply_markup: editMenuMarkup,
           ...previewOption,
         });
-      } catch (editError) {
-        warn("Failed to send or edit final result", editError);
+        const messageId = ctx.callbackQuery?.message?.message_id;
+        if (messageId) {
+          await safeDelete(ctx.api, chatId, messageId);
+        }
+      } catch (finalError) {
+        try {
+          await ctx.editMessageText(replyText, {
+            parse_mode: "HTML",
+            reply_markup: editMenuMarkup,
+            ...previewOption,
+          });
+        } catch (editError) {
+          warn("Failed to send or edit final result", editError);
+        }
       }
     }
   }
