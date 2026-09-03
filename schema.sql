@@ -7,13 +7,8 @@ CREATE TABLE IF NOT EXISTS channels (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_channel ON channels(user_id, channel_id);
 
--- Mirrors the lazy ensureTable DDL in src/db/lyrics.ts. Populated only when
--- lyrics are actually found (never "not found" results) — see cacheLyrics.
-CREATE TABLE IF NOT EXISTS lyrics_cache (
-  track_id INTEGER PRIMARY KEY,
-  lyrics TEXT NOT NULL,
-  created_at INTEGER NOT NULL DEFAULT (unixepoch())
-);
+-- lyrics_cache was dropped in migration 0004 — superseded by `tracks` (see
+-- migration 0003), which holds lyrics alongside artist/title/file_id.
 
 -- Mirrors the lazy ensureTable DDL in src/db/transliterations.ts.
 CREATE TABLE IF NOT EXISTS transliterations (
