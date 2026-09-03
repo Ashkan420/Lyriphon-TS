@@ -6,8 +6,7 @@ import { getTrackRecord, upsertTrack, setTrackFileId } from "../../db/tracks";
 import { safeAnswer, safeDelete, attachAudioAndPromptChannel } from "../../utils/telegram";
 import {
   TrackProgressReporter,
-  buildTrackResultRichHtml,
-  buildTelegraphKeyboardRow,
+  buildTrackResultHtml,
   countLyricLines,
 } from "../../utils/richMessages";
 import { log, previewText, warn } from "../../utils/logger";
@@ -21,7 +20,7 @@ import { Env } from "../../env";
 import { analyzeLanguages } from "../../services/translation/language-analyzer";
 import { buildEditMenu, resetTranslationState } from "./index";
 import { MESSAGE_EFFECT_CONFETTI, AUTOFETCH_MAX_PENDING_PER_USER } from "../../config";
-import { isAutoFetchEnabled, isUserAutoFetchEnabled, getUserLinkPreviewEnabled, isUserRichButtonEnabled } from "../../db/settings";
+import { isAutoFetchEnabled, isUserAutoFetchEnabled, getUserLinkPreviewEnabled } from "../../db/settings";
 import {
   countPendingByUser,
   createAudioRequest,
@@ -226,51 +225,31 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   const hasAudio = Boolean(pendingAudioFileId);
   log("track pipeline: done", JSON.stringify({ trackName, artistName, hasAudio, hasLyrics: Boolean(lyrics) }));
 
-  const status = hasAudio ? "Telegraph Created & Audio Attached" : "Telegraph Created";
-  const extra = hasAudio ? "" : "Send a music file to attach the Lyrics button to it.\n\n";
-
-  // Plain-HTML fallback if sendRichMessage is rejected by the API.
-  const replyText = `✅ <b>${status}</b>\n\n<blockquote>🎵 <b>${(trackName)}</b>\n👤 ${(artistName)}\n💽 ${(albumName)}\n📅 ${(releaseDate)}</blockquote>\n\n${extra}👇 Edit options below — or tap to open the page:\n<a href="${telegraphResult.url}">📖 Open Telegraph Page</a>`;
-
-  // Respect the user's link-preview preference (via /settings): on the rich
-  // card it decides whether the album cover is embedded; on the plain
-  // fallback it keeps controlling the Telegraph link preview card.
+  // Result card: hyperlink + native link preview (the preview follows the
+  // live page, so cover edits show through and the edit menu keeps its own
+  // keyboard). Preview preference respected via /settings.
   const showPreviews = await getUserLinkPreviewEnabled(env.DB, requesterId).catch(() => true);
-  const previewOption = { link_preview_options: { is_disabled: !showPreviews } } as any;
-  // Experimental styled tg-button inside the card vs the regular inline
-  // keyboard button every client renders. Opt-in, default off.
-  const useRichButton = await isUserRichButtonEnabled(env.DB, requesterId).catch(() => false);
 
-  const richHtml = buildTrackResultRichHtml({
+  const replyText = buildTrackResultHtml({
     trackName,
     artistName,
     albumName,
     releaseDate,
-    durationSeconds: trackData.duration,
     telegraphUrl: telegraphResult.url,
-    lyricLineCount,
     authorName,
-    coverUrl: albumCoverUrl,
-    includeCover: showPreviews,
     hasAudio,
-    useRichButton,
   });
-  const editMenu = buildEditMenu();
-  const finalKeyboard = useRichButton
-    ? editMenu
-    : [buildTelegraphKeyboardRow(telegraphResult.url), ...editMenu];
 
   // One message from selection to result: the final card is an edit of the
-  // progress message. False → the rich channel is gone; fall back to the
-  // plain-HTML send chain.
-  const finalized = await progress.finalize(richHtml, { inline_keyboard: finalKeyboard });
+  // progress message. False → no edit target; fall back to the send chain.
+  const finalized = await progress.finalizeText(replyText, { inline_keyboard: buildEditMenu() }, !showPreviews);
   if (!finalized) {
     try {
       await ctx.api.sendMessage(chatId, replyText, {
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: finalKeyboard },
+        reply_markup: { inline_keyboard: buildEditMenu() },
         message_effect_id: MESSAGE_EFFECT_CONFETTI,
-        ...previewOption,
+        link_preview_options: { is_disabled: !showPreviews },
       });
       const messageId = progress.activeMessageId;
       if (messageId !== undefined) {
@@ -281,8 +260,8 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
       try {
         await ctx.api.sendMessage(chatId, replyText, {
           parse_mode: "HTML",
-          reply_markup: { inline_keyboard: finalKeyboard },
-          ...previewOption,
+          reply_markup: { inline_keyboard: buildEditMenu() },
+          link_preview_options: { is_disabled: !showPreviews },
         });
         const messageId = progress.activeMessageId;
         if (messageId !== undefined) {
@@ -292,8 +271,8 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
         try {
           await ctx.editMessageText(replyText, {
             parse_mode: "HTML",
-            reply_markup: { inline_keyboard: finalKeyboard },
-            ...previewOption,
+            reply_markup: { inline_keyboard: buildEditMenu() },
+            link_preview_options: { is_disabled: !showPreviews },
           });
         } catch (editError) {
           warn("Failed to send or edit final result", editError);

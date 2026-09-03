@@ -153,11 +153,21 @@ async function deliverFile(env: Env, audio: any, token: string): Promise<void> {
     : `>\`${escapeMd(trackName)} — ${escapeMd(artistName)}\``;
 
   const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
+  // Fancy mode (opt-in): skip the regular Lyrics keyboard button — the
+  // styled rich button rides as a one-line message right after the file.
+  let fancyButton = false;
+  if (row.telegraph_url) {
+    try {
+      fancyButton = await isUserRichButtonEnabled(env.DB, row.user_id);
+    } catch (error) {
+      warn("bridge: rich button preference lookup failed", error);
+    }
+  }
   try {
     await api.sendAudio(row.chat_id, audio.file_id, {
       caption,
       parse_mode: "MarkdownV2",
-      reply_markup: row.telegraph_url
+      reply_markup: row.telegraph_url && !fancyButton
         ? { inline_keyboard: [[{ text: "Lyrics", url: row.telegraph_url }]] }
         : undefined,
     });
@@ -170,13 +180,9 @@ async function deliverFile(env: Env, audio: any, token: string): Promise<void> {
   }
 
   await setRequestStatus(env.DB, token, "delivered");
-  // Same experimental rich button as attachAudioAndPromptChannel, so bridge
-  // deliveries match the manual-attach look for opted-in users.
-  if (row.telegraph_url) {
+  if (fancyButton && row.telegraph_url) {
     try {
-      if (await isUserRichButtonEnabled(env.DB, row.user_id)) {
-        await sendRichTelegraphButton(api, row.chat_id, row.telegraph_url);
-      }
+      await sendRichTelegraphButton(api, row.chat_id, row.telegraph_url);
     } catch (error) {
       warn("bridge: rich telegraph button failed", error);
     }

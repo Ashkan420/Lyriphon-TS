@@ -232,88 +232,31 @@ export class TrackProgressReporter {
     }
   }
 
-  // Persist the final card by editing the progress message in place — the
-  // last state IS the result. Returns false when the rich channel is gone so
-  // the caller can send its plain-HTML message instead.
-  async finalize(html: string, markup: InlineKeyboardMarkup): Promise<boolean> {
-    if (this.dead || !this.richMode || this.progressMessageId === undefined) {
+  // Persist the result by editing the progress message into the final
+  // plain-HTML card — the last state IS the result. The Telegraph link rides
+  // as a hyperlink in the text and the cover comes from the native link
+  // preview, so later Telegraph edits (cover, lyrics) are reflected by
+  // Telegram's own preview instead of a baked-in image. Works in fallback
+  // mode too (edits the original results message in place). Returns false
+  // when no edit target exists or the edit fails, so the caller can send its
+  // plain-HTML message instead.
+  async finalizeText(text: string, markup: InlineKeyboardMarkup, disablePreview: boolean): Promise<boolean> {
+    const targetId = this.progressMessageId ?? this.fallbackMessageId;
+    if (this.dead || targetId === undefined) {
       return false;
     }
     try {
-      await this.api.editMessageText(
-        this.chatId,
-        this.progressMessageId,
-        { html, skip_entity_detection: true } satisfies InputRichMessage,
-        { reply_markup: markup },
-      );
+      await this.api.editMessageText(this.chatId, targetId, text, {
+        parse_mode: "HTML",
+        reply_markup: markup,
+        link_preview_options: { is_disabled: disablePreview },
+      });
       return true;
     } catch (error) {
-      warn("rich finalize edit failed, caller should fall back to HTML", error);
+      warn("finalize edit failed, caller should fall back to HTML", error);
       return false;
     }
   }
-}
-
-// The persisted result card. The album cover takes the role of the old
-// link-preview card, so it follows the same user preference (includeCover).
-// useRichButton switches the Telegraph link between the experimental styled
-// tg-button inside the card and a regular inline-keyboard button (caller
-// appends that row itself — see buildTrackResultKeyboard).
-export function buildTrackResultRichHtml(options: {
-  trackName: string;
-  artistName: string;
-  albumName: string;
-  releaseDate: string;
-  durationSeconds?: number;
-  telegraphUrl: string;
-  lyricLineCount: number;
-  authorName: string;
-  coverUrl: string;
-  includeCover: boolean;
-  hasAudio: boolean;
-  useRichButton: boolean;
-}): string {
-  const parts: string[] = [];
-
-  if (options.includeCover && isValidImageUrl(options.coverUrl)) {
-    parts.push(`<img src="${escapeRichHtml(options.coverUrl)}"/>`);
-  }
-
-  parts.push(`<h2>🎵 ${escapeRichHtml(options.trackName)}</h2>`);
-
-  const quoteBits: string[] = [`<b>${escapeRichHtml(options.artistName)}</b>`];
-  if (options.albumName && options.albumName !== "Unknown Album") {
-    quoteBits.push(`<i>${escapeRichHtml(options.albumName)}</i>`);
-  }
-  const metaBits: string[] = [];
-  if (options.releaseDate && options.releaseDate !== "Unknown") {
-    metaBits.push(`📅 ${escapeRichHtml(options.releaseDate)}`);
-  }
-  if (options.durationSeconds && options.durationSeconds > 0) {
-    metaBits.push(`⏱ ${formatDuration(options.durationSeconds)}`);
-  }
-  const quoteLines = [quoteBits.join(" — ")];
-  if (metaBits.length) {
-    quoteLines.push(metaBits.join(" · "));
-  }
-  quoteLines.push(`<cite>Created by ${escapeRichHtml(options.authorName)}</cite>`);
-  parts.push(`<blockquote>${quoteLines.join("<br>")}</blockquote>`);
-
-  if (options.lyricLineCount > 0) {
-    parts.push(`<p>✅ Lyrics attached — <b>${options.lyricLineCount}</b> lines ready.</p>`);
-  } else {
-    parts.push(`<p>⚠️ No lyrics found for this track.</p>`);
-  }
-
-  if (!options.hasAudio) {
-    parts.push(`<footer>🎧 Send a music file to attach the Lyrics button to it.</footer>`);
-  }
-
-  if (options.useRichButton) {
-    parts.push(telegraphButtonRowHtml(options.telegraphUrl, "📖 Open Telegraph Page"));
-  }
-
-  return parts.join("\n");
 }
 
 // Experimental styled rich button. Older Telegram clients don't render it at
@@ -327,10 +270,36 @@ function telegraphButtonRowHtml(url: string, label: string): string {
   );
 }
 
-// First keyboard row for the default (non-rich-button) card: a regular URL
-// button every Telegram client renders.
-export function buildTelegraphKeyboardRow(url: string) {
-  return [{ text: "📖 Open Telegraph Page", url }];
+// The persisted result: old-style HTML card. The Telegraph link is a plain
+// hyperlink and the album cover comes from Telegram's native link preview,
+// so edits to the page (cover, lyrics) are reflected by the preview instead
+// of a baked-in image, and the edit-menu keyboard stays self-contained.
+export function buildTrackResultHtml(options: {
+  trackName: string;
+  artistName: string;
+  albumName: string;
+  releaseDate: string;
+  telegraphUrl: string;
+  authorName: string;
+  hasAudio: boolean;
+}): string {
+  const status = options.hasAudio ? "Telegraph Created & Audio Attached" : "Telegraph Created";
+  const esc = escapeRichHtml;
+
+  let body =
+    `✅ <b>${status}</b>\n\n` +
+    `<blockquote>🎵 <b>${esc(options.trackName)}</b>\n` +
+    `👤 ${esc(options.artistName)}\n` +
+    `💽 ${esc(options.albumName)}\n` +
+    `📅 ${esc(options.releaseDate)}</blockquote>\n\n`;
+
+  if (!options.hasAudio) {
+    body += "Send a music file to attach the Lyrics button to it.\n\n";
+  }
+
+  body += `👇 Edit options below — or tap to open the page:\n<a href="${esc(options.telegraphUrl)}">📖 Open Telegraph Page</a>`;
+
+  return body;
 }
 
 // One-line rich message with just the styled Telegraph button, sent under a

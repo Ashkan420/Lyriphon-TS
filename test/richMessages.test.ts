@@ -3,8 +3,7 @@ import {
   escapeRichHtml,
   countLyricLines,
   renderTrackProgressHtml,
-  buildTrackResultRichHtml,
-  buildTelegraphKeyboardRow,
+  buildTrackResultHtml,
   TrackProgressReporter,
 } from "../src/utils/richMessages";
 import { setUserRichButtonEnabled, isUserRichButtonEnabled } from "../src/db/settings";
@@ -74,57 +73,35 @@ describe("renderTrackProgressHtml", () => {
   });
 });
 
-describe("buildTrackResultRichHtml", () => {
+describe("buildTrackResultHtml", () => {
   const base = {
-    trackName: "Song",
+    trackName: "Song <Vol. 1>",
     artistName: "Artist",
     albumName: "Album",
     releaseDate: "2020-03-20",
-    durationSeconds: 200,
     telegraphUrl: "https://telegra.ph/abc",
-    lyricLineCount: 42,
     authorName: "User",
-    coverUrl: "https://e-cdns-images.dzcdn.net/cover.jpg",
-    includeCover: true,
     hasAudio: false,
-    useRichButton: false,
   };
 
-  it("renders the full card with the keyboard-button variant by default", () => {
-    const html = buildTrackResultRichHtml(base);
-    expect(html).toContain('<img src="https://e-cdns-images.dzcdn.net/cover.jpg"/>');
-    expect(html).toContain("<h2>🎵 Song</h2>");
-    expect(html).toContain("<b>Artist</b> — <i>Album</i>");
-    expect(html).toContain("📅 2020-03-20 · ⏱ 3:20");
-    expect(html).toContain("<cite>Created by User</cite>");
-    expect(html).toContain("✅ Lyrics attached — <b>42</b> lines ready.");
-    expect(html).toContain("<footer>🎧 Send a music file to attach the Lyrics button to it.</footer>");
+  it("renders the hyperlink card with native-preview cover (no baked-in image)", () => {
+    const html = buildTrackResultHtml(base);
+    expect(html).toContain("✅ <b>Telegraph Created</b>");
+    expect(html).toContain("<blockquote>🎵 <b>Song &lt;Vol. 1&gt;</b>");
+    expect(html).toContain("👤 Artist");
+    expect(html).toContain("💽 Album");
+    expect(html).toContain("📅 2020-03-20");
+    expect(html).toContain("Send a music file to attach the Lyrics button to it.");
+    expect(html).toContain('<a href="https://telegra.ph/abc">📖 Open Telegraph Page</a>');
+    // Cover comes from the link preview, not the message body.
+    expect(html).not.toContain("<img");
     expect(html).not.toContain("tg-button");
   });
 
-  it("uses the experimental tg-button-row when opted in", () => {
-    const html = buildTrackResultRichHtml({ ...base, useRichButton: true });
-    expect(html).toContain('<tg-button type="url" style="primary" url="https://telegra.ph/abc">');
-    expect(html).toContain('<tg-button-row align="center">');
-  });
-
-  it("omits the cover when previews are disabled or the url is not an image", () => {
-    expect(buildTrackResultRichHtml({ ...base, includeCover: false })).not.toContain("<img");
-    expect(buildTrackResultRichHtml({ ...base, coverUrl: "" })).not.toContain("<img");
-  });
-
-  it("renders the no-lyrics warning and drops the footer when audio is attached", () => {
-    const html = buildTrackResultRichHtml({ ...base, lyricLineCount: 0, hasAudio: true });
-    expect(html).toContain("⚠️ No lyrics found for this track.");
-    expect(html).not.toContain("<footer>");
-  });
-});
-
-describe("buildTelegraphKeyboardRow", () => {
-  it("builds a regular URL button every client renders", () => {
-    expect(buildTelegraphKeyboardRow("https://telegra.ph/abc")).toEqual([
-      { text: "📖 Open Telegraph Page", url: "https://telegra.ph/abc" },
-    ]);
+  it("drops the attach hint when audio is already attached", () => {
+    const html = buildTrackResultHtml({ ...base, hasAudio: true });
+    expect(html).toContain("Telegraph Created & Audio Attached");
+    expect(html).not.toContain("Send a music file");
   });
 });
 
@@ -250,21 +227,25 @@ describe("TrackProgressReporter", () => {
     expect(calls[2].args[2]).toBe("⏳ Fetching lyrics...");
   });
 
-  it("finalize() turns the progress message into the result card with the keyboard", async () => {
+  it("finalizeText() turns the progress message into the result card with preview control", async () => {
     const { api, calls } = makeApi();
     const reporter = new TrackProgressReporter(api, 1, 10);
     await reporter.start();
     calls.length = 0;
 
-    const ok = await reporter.finalize("<h2>Card</h2>", { inline_keyboard: [] });
+    const ok = await reporter.finalizeText("<b>Card</b>", { inline_keyboard: [] }, false);
     expect(ok).toBe(true);
     expect(calls[0].method).toBe("editMessageText");
     expect(calls[0].args[1]).toBe(777);
-    expect(calls[0].args[2]).toMatchObject({ html: "<h2>Card</h2>" });
-    expect(calls[0].args[3]).toMatchObject({ reply_markup: { inline_keyboard: [] } });
+    expect(calls[0].args[2]).toBe("<b>Card</b>");
+    expect(calls[0].args[3]).toMatchObject({
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: [] },
+      link_preview_options: { is_disabled: false },
+    });
   });
 
-  it("finalize() returns false in fallback mode so the caller sends plain HTML", async () => {
+  it("finalizeText() works in fallback mode too (edits the original message)", async () => {
     const { api, calls } = makeApi();
     api.sendRichMessage = (...args: unknown[]) => {
       calls.push({ method: "sendRichMessage", args });
@@ -274,7 +255,24 @@ describe("TrackProgressReporter", () => {
     await reporter.start();
     calls.length = 0;
 
-    const ok = await reporter.finalize("<h2>Card</h2>", { inline_keyboard: [] });
+    const ok = await reporter.finalizeText("<b>Card</b>", { inline_keyboard: [] }, true);
+    expect(ok).toBe(true);
+    expect(calls[0].args[1]).toBe(10);
+    expect(calls[0].args[3]).toMatchObject({ link_preview_options: { is_disabled: true } });
+  });
+
+  it("finalizeText() returns false when there is no edit target", async () => {
+    const { api, calls } = makeApi();
+    api.sendRichMessage = (...args: unknown[]) => {
+      calls.push({ method: "sendRichMessage", args });
+      return Promise.reject(new Error("method not found"));
+    };
+    const reporter = new TrackProgressReporter(api, 1, undefined);
+    await reporter.start();
+    expect(reporter.isDead).toBe(true);
+    calls.length = 0;
+
+    const ok = await reporter.finalizeText("<b>Card</b>", { inline_keyboard: [] }, false);
     expect(ok).toBe(false);
     expect(calls.length).toBe(0);
   });

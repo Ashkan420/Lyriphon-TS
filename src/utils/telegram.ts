@@ -167,30 +167,33 @@ export async function attachAudioAndPromptChannel(
 ) {
   const caption = buildAudioCaption(trackName, artistName, telegraphUrl);
 
-  const inlineKeyboard = [
-    [{ text: "Lyrics", url: telegraphUrl }],
-  ];
+  // Fancy mode (opt-in via /settings): audio captions can't carry tg-buttons,
+  // so the button rides as a one-line rich message right below the file —
+  // and the regular Lyrics keyboard button is skipped to avoid a duplicate.
+  let fancyButton = false;
+  try {
+    fancyButton = await isUserRichButtonEnabled(db, userId);
+  } catch (error) {
+    warn("rich button preference lookup failed", error);
+  }
 
   try {
     await bot.sendAudio(chatId, fileId, {
       caption,
       parse_mode: "MarkdownV2",
-      reply_markup: { inline_keyboard: inlineKeyboard },
+      reply_markup: fancyButton ? undefined : { inline_keyboard: [[{ text: "Lyrics", url: telegraphUrl }]] },
     });
   } catch {
     await bot.sendMessage(chatId, "❌ Failed to attach audio.");
     return null;
   }
 
-  // Experimental styled rich button under the music file (opt-in via
-  // /settings; audio captions can't carry tg-buttons, so it rides as a
-  // one-line message below). Regular Lyrics button stays either way.
-  try {
-    if (await isUserRichButtonEnabled(db, userId)) {
+  if (fancyButton) {
+    try {
       await sendRichTelegraphButton(bot, chatId, telegraphUrl);
+    } catch (error) {
+      warn("rich telegraph button under audio failed", error);
     }
-  } catch (error) {
-    warn("rich telegraph button under audio failed", error);
   }
 
   session.audio.pendingFileId = fileId;
