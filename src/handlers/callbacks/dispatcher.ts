@@ -13,6 +13,7 @@ import {
 import { handleExpandEditMenu } from "./index";
 import { handleTranslateCallback } from "./translate";
 import { handleLogsRefreshCallback, handleLogsCloseCallback } from "./logs";
+import { handleSettingsCallback } from "../settings";
 
 // Single stable entry point. `bot.ts` imports handleCallbackQuery /
 // processTextMessage from "../handlers/callbacks" — that barrel re-exports this,
@@ -49,7 +50,7 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
   }
 
   if (data.startsWith("send_channel_")) {
-    await handleSendToChannelCallback(ctx, session);
+    await handleSendToChannelCallback(ctx, session, env);
     return;
   }
 
@@ -65,6 +66,11 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
 
   if (data === "logs_close") {
     await handleLogsCloseCallback(ctx);
+    return;
+  }
+
+  if (data.startsWith("settings_")) {
+    await handleSettingsCallback(ctx, env);
     return;
   }
 

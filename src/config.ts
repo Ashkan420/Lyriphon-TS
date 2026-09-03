@@ -13,3 +13,13 @@ export const LOG_BUFFER_SIZE = 120;
 
 // Telegram effects
 export const MESSAGE_EFFECT_CONFETTI = "5046509860389126442";
+
+// Deezload auto-fetch bridge (teleproto userbot in a DO relays jobs through
+// @deezload2bot).
+export const AUTOFETCH_MAX_PENDING_PER_USER = 3;
+export const AUTOFETCH_REQUEST_TTL_SECONDS = 7200;
+// Hard cap for one bridge job (deezload wait + forward); the DO alarm
+// watchdog fails jobs that exceed it.
+export const AUTOFETCH_JOB_TIMEOUT_MS = 240000;
+// Max jobs waiting in BridgeDO's FIFO before new enqueues are rejected.
+export const AUTOFETCH_MAX_QUEUE = 10;

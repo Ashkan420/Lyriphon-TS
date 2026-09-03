@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "franc": "^6.2.0",
-    "grammy": "^1.44.0"
+    "grammy": "^1.44.0",
+    "teleproto": "^1.229.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "*",

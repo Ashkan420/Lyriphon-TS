@@ -3,8 +3,8 @@ import { adminSettingsText, buildAdminKeyboard, isBotOwner } from "../src/handle
 
 describe("admin settings UI", () => {
   it("buildAdminKeyboard colors toggles and hides Logs when debug is off", () => {
-    const kb = buildAdminKeyboard(false, true);
-    expect(kb).toHaveLength(2);
+    const kb = buildAdminKeyboard(false, true, false);
+    expect(kb).toHaveLength(3);
     expect(kb[0][0]).toMatchObject({
       text: "🐛 Debugging: OFF",
       callback_data: "admin_toggle_debug",
@@ -15,21 +15,28 @@ describe("admin settings UI", () => {
       callback_data: "admin_toggle_multilingual",
       style: "success",
     });
+    expect(kb[2][0]).toMatchObject({
+      text: "🎧 Auto-fetch: OFF",
+      callback_data: "admin_toggle_autofetch",
+      style: "danger",
+    });
   });
 
   it("buildAdminKeyboard shows unstyled Logs when debug is on", () => {
-    const kb = buildAdminKeyboard(true, false);
-    expect(kb).toHaveLength(3);
+    const kb = buildAdminKeyboard(true, false, true);
+    expect(kb).toHaveLength(4);
     expect(kb[0][0].style).toBe("success");
     expect(kb[1][0].style).toBe("danger");
-    expect(kb[2][0]).toEqual({ text: "📋 Logs", callback_data: "admin_logs" });
-    expect(kb[2][0].style).toBeUndefined();
+    expect(kb[2][0]).toMatchObject({ text: "🎧 Auto-fetch: ON", style: "success" });
+    expect(kb[3][0]).toEqual({ text: "📋 Logs", callback_data: "admin_logs" });
+    expect(kb[3][0].style).toBeUndefined();
   });
 
   it("adminSettingsText includes on/off status", () => {
-    const text = adminSettingsText(true, false);
+    const text = adminSettingsText(true, false, true);
     expect(text).toContain("Debug: <b>on</b>");
     expect(text).toContain("Multilingual: <b>off</b>");
+    expect(text).toContain("Auto-fetch: <b>on</b>");
   });
 });
 

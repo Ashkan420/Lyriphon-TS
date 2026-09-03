@@ -58,6 +58,8 @@ export interface TelegraphFlowData extends BaseFlowData {
   pendingTranslationLang?: string;
   languageAnalysis?: import("../services/translation/language-analyzer").LanguageAnalysis;
   multilingualEnabled?: boolean;
+  // Token of the in-flight deezload auto-fetch job for this track, if any.
+  bridgeReqToken?: string;
 }
 
 export interface SessionData {

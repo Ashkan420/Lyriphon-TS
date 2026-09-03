@@ -43,11 +43,14 @@ Telegram POST /webhook
 | `src/bot.ts`              | Command/callback/message registration; `bot.catch` swallows handler errors |
 | `src/env.ts`              | `Env` bindings + secrets                                                   |
 | `src/config.ts`           | Constants (timeouts, channel link, etc.)                                   |
-| `src/handlers/`           | User-facing handlers                                                       |
+| `src/handlers/`           | User-facing handlers (incl. `bridge.ts` — deezload relay endpoint)         |
 | `src/handlers/callbacks/` | Package: track pick, edit, translate, channel send, logs                   |
 | `src/session/`            | FSM: `types`, `flows`, `transitions` (`VALID_TRANSITIONS`, version bump)   |
 | `src/services/`           | Deezer, LRCLIB, Telegraph, translation/                                    |
-| `src/db/`                 | D1: `channels`, `transliterations`, `lyrics`                               |
+| `src/db/`                 | D1: `channels`, `transliterations`, `tracks`, `settings`, `audioRequests`  |
+| `src/doBridge.ts`         | `BridgeDO` — teleproto userbot in a DO (deezload relay, serial queue)      |
+| `src/bridge/`             | teleproto integration: sockets transport, client/auth/jobs wrappers, node shims |
+| `bridge/`                 | Docs for the in-Worker bridge (no runtime code)                            |
 | `src/utils/`              | retry, fetch, logger, telegram helpers, URL validation                     |
 | `test/`                   | vitest unit tests                                                          |
 
@@ -92,6 +95,28 @@ Do **not** reintroduce a monolith `handlers/callbacks.ts`.
 7. **Translation combine** (`combine.ts`): returns `CombineResult | null` (`{ combined, mismatch }`). Mismatch degrades to original + separator + translation; `translate.ts` may retry once. Don't revert to hard-null-on-mismatch.
 8. **Owner commands** gated by `BOT_OWNER_ID`: `/admin` (settings panel with debug/multilingual toggles + logs), `/session`, `/debug`, `/logs`, `/multilingual` (and related callbacks). Fail closed when `BOT_OWNER_ID` is unset — owner commands are disabled for everyone.
 9. **Optional Gemini:** missing `GEMINI_API_KEY` → translation/Finglish degrade gracefully, don't crash.
+10. **Deezload bridge:** `BRIDGE_CHAT_ID` traffic is intercepted in `src/index.ts`
+   **before** per-user DO routing and handled session-free in
+   `src/handlers/bridge.ts` (the `audio_requests` D1 table is the queue).
+   The consumer is `BridgeDO` (`src/doBridge.ts`): a teleproto userbot
+   client in a Durable Object with a serial job queue and an alarm watchdog.
+   Media never transits the Worker — the DO forwards deezload's audio into
+   the bridge DM and the bot re-sends it by `file_id`. Auth = chat id +
+   single-use `req_token`; owner login via `/bridge_auth` → `/bridge_code`
+   → `/bridge_pass`. The auto-fetch toggle is a global D1 setting
+   (`src/db/settings.ts`), default off, fail closed. Never throw out of
+   `handleBridgeUpdate` — same 500-redelivery rule as `SessionDO.fetch`.
+   Node builtins teleproto doesn't use on this path are aliased to
+   `src/bridge/node_shims.ts` in `wrangler.toml [alias]`; `crypto` must stay
+   unaliased (workerd's native `node:crypto` is the hot path).
+11. **Tracks store:** `src/db/tracks.ts` is the unified per-song table
+   (`track_id, title, artist, file_id, lyrics`). A stored `file_id` means
+   "already fetched": track picks re-send it instantly instead of hitting
+   the bridge, and the attach decision button relabels to 🔁 Replace Audio.
+   `lyrics_cache` is legacy (read-only, backfilled into `tracks` by
+   migration 0003). BridgeDO jobs run through a persisted FIFO (cap
+   `AUTOFETCH_MAX_QUEUE`), so concurrent track picks queue with a reported
+   position instead of being dropped.
 
 ## Env / secrets
 
@@ -103,6 +128,9 @@ From `.dev.vars.example` / `Env`:
 | `TELEGRAPH_ACCESS_TOKEN` |   yes    | pages                  |
 | `WEBHOOK_SECRET_TOKEN`   |   yes    | header check           |
 | `BOT_OWNER_ID`           |    no    | owner cmds             |
+| `BRIDGE_CHAT_ID`         |    no    | bridge DM (userbot account id); unset = feature off |
+| `TELEGRAM_API_ID`        |    no    | MTProto creds for the bridge userbot |
+| `TELEGRAM_API_HASH`      |    no    | MTProto creds for the bridge userbot |
 | `WEBHOOK_PATH`           |    no    | default `webhook`      |
 | `TRANSLATION_PROVIDER`   |    no    | only `gemini`          |
 | `GEMINI_API_KEY`         |    no    | translation + Finglish |

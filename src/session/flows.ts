@@ -56,6 +56,7 @@ export function createTelegraphFlow(): TelegraphFlowData {
     translationCooldownUntil: undefined,
     pendingTranslationLang: undefined,
     languageAnalysis: undefined,
+    bridgeReqToken: undefined,
   };
 }
 
@@ -135,6 +136,7 @@ export function resetFlow(flow: AudioFlowData | SearchFlowData | EditFlowData | 
     flow.translationCooldownUntil = undefined;
     flow.pendingTranslationLang = undefined;
     flow.languageAnalysis = undefined;
+    flow.bridgeReqToken = undefined;
     flow.locked = false;
     return;
   }
