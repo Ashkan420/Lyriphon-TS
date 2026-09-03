@@ -142,6 +142,16 @@ export async function searchAndShowResults(
   return true;
 }
 
+// MarkdownV2 caption shared by the manual attach flow and the deezload
+// bridge delivery: blockquote with `track — artist` in code + the Telegraph
+// link hidden behind a zero-width character.
+export function buildAudioCaption(trackName: string, artistName: string, telegraphUrl: string): string {
+  const trackNameMd = escapeMdUtil(trackName);
+  const artistNameMd = escapeMdUtil(artistName);
+  const hiddenLink = `[‎](${telegraphUrl})`;
+  return `>\`${trackNameMd} — ${artistNameMd}\`${hiddenLink}`;
+}
+
 export async function attachAudioAndPromptChannel(
   bot: Api<RawApi>,
   db: D1Database,
@@ -153,10 +163,7 @@ export async function attachAudioAndPromptChannel(
   trackName: string,
   artistName: string,
 ) {
-  const trackNameMd = escapeMdUtil(trackName);
-  const artistNameMd = escapeMdUtil(artistName);
-  const hiddenLink = `[‎](${telegraphUrl})`;
-  const caption = `>\`${trackNameMd} — ${artistNameMd}\`${hiddenLink}`;
+  const caption = buildAudioCaption(trackName, artistName, telegraphUrl);
 
   const inlineKeyboard = [
     [{ text: "Lyrics", url: telegraphUrl }],

@@ -14,7 +14,14 @@ import { SessionData } from "../../session/types";
 import { Env } from "../../env";
 import { analyzeLanguages } from "../../services/translation/language-analyzer";
 import { buildEditMenu, resetTranslationState } from "./index";
-import { MESSAGE_EFFECT_CONFETTI } from "../../config";
+import { MESSAGE_EFFECT_CONFETTI, AUTOFETCH_MAX_PENDING_PER_USER } from "../../config";
+import { isAutoFetchEnabled } from "../../db/settings";
+import {
+  countPendingByUser,
+  createAudioRequest,
+  setRequestTelegraphUrl,
+  expireStalePending,
+} from "../../db/audioRequests";
 
 export async function handleTrackSelectionCallback(ctx: Context, session: SessionData, env: Env) {
   await safeAnswer(ctx);
@@ -48,6 +55,22 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   const albumId = trackData.album?.id;
   const albumCoverUrl = trackData.album?.cover_xl ?? trackData.album?.cover_big ?? "";
   log("track pipeline: resolved", JSON.stringify({ trackId, trackName, artistName, albumName }));
+
+  // Auto-fetch via the deezload bridge — queued as soon as the song id is
+  // known. Best-effort; failure just means the user fetches it themselves.
+  const requesterId = String(ctx.from?.id ?? "");
+  const requesterChatId = ctx.chat?.id;
+  if (requesterChatId) {
+    const token = await enqueueAutoFetch(
+      env, requesterId, requesterChatId, trackId, trackName, artistName,
+    );
+    if (token) {
+      session.telegraph.bridgeReqToken = token;
+      try {
+        await ctx.reply("🎧 Auto-fetch queued — the file will arrive here when ready.");
+      } catch {}
+    }
+  }
 
   let releaseDate = "Unknown";
   if (albumId) {
@@ -135,6 +158,15 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   session.telegraph.translationCooldownUntil = undefined;
   session.telegraph.pendingTranslationLang = undefined;
   resetTranslationState(session);
+
+  // The bridge job now has a Lyrics link to attach to the delivered audio.
+  if (session.telegraph.bridgeReqToken) {
+    try {
+      await setRequestTelegraphUrl(env.DB, session.telegraph.bridgeReqToken, telegraphResult.url);
+    } catch (error) {
+      warn("autofetch: failed to attach telegraph url", error);
+    }
+  }
 
   if (session.telegraph.languageAnalysis) {
     const la = session.telegraph.languageAnalysis;
@@ -234,5 +266,64 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
 
     clearAudioState(session);
     session.telegraph.url = undefined;
+  }
+}
+
+// Enqueue a deezload auto-fetch job for this track, best-effort: any failure
+// (toggle off, D1 error, bridge chat unconfigured, Telegram flood) must not
+// break the normal track pipeline. Returns the request token on success.
+async function enqueueAutoFetch(
+  env: Env,
+  userId: string,
+  chatId: number,
+  trackId: number,
+  trackName: string,
+  artistName: string,
+): Promise<string | undefined> {
+  try {
+    if (!env.BRIDGE_CHAT_ID || !env.TELEGRAM_API_ID || !env.TELEGRAM_API_HASH) {
+      return undefined;
+    }
+    if (!(await isAutoFetchEnabled(env.DB))) {
+      return undefined;
+    }
+    // Materialize TTL expiry first so stale rows (jobs whose delivery never
+    // happened) don't pin the user at the pending cap for the full TTL.
+    await expireStalePending(env.DB);
+    const pending = await countPendingByUser(env.DB, userId);
+    if (pending >= AUTOFETCH_MAX_PENDING_PER_USER) {
+      log("autofetch: user at pending cap", userId, pending);
+      return undefined;
+    }
+
+    const token = crypto.randomUUID();
+    await createAudioRequest(env.DB, {
+      reqToken: token,
+      userId,
+      chatId,
+      trackId,
+      trackTitle: trackName,
+      artistName,
+    });
+    await sendBridgeJob(env, token, trackId, chatId);
+    log("autofetch: job queued", JSON.stringify({ trackId, token }));
+    return token;
+  } catch (error) {
+    warn("autofetch: enqueue failed", error);
+    return undefined;
+  }
+}
+
+// Hand the job to BridgeDO (teleproto userbot). Busy DO = reject; the D1 row
+// stays pending until TTL expiry.
+async function sendBridgeJob(env: Env, token: string, trackId: number, chatId: number): Promise<void> {
+  const stub = env.BRIDGE_DO.get(env.BRIDGE_DO.idFromName("bridge"));
+  const res = await stub.fetch("https://bridge/enqueue", {
+    method: "POST",
+    body: JSON.stringify({ token, trackId, chatId }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+  if (!body.ok) {
+    throw new Error(`bridge rejected job: ${body.error ?? res.status}`);
   }
 }

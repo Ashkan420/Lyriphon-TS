@@ -1,7 +1,7 @@
 name = "lyriphon-workers"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
-compatibility_flags = [ "nodejs_als" ]
+compatibility_flags = [ "nodejs_als", "nodejs_compat" ]
 
 [vars]
 WEBHOOK_PATH = "webhook"
@@ -15,6 +15,38 @@ database_id = "c7e8db7b-6144-482c-a3cf-57b4ee861780"
 name = "SESSION_DO"
 class_name = "SessionDO"
 
+[[durable_objects.bindings]]
+name = "BRIDGE_DO"
+class_name = "BridgeDO"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = [ "SessionDO" ]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = [ "BridgeDO" ]
+
+# Node builtin shims so teleproto bundles for the Workers runtime. Only the
+# code paths the bridge uses are real; the rest throw loudly
+# (src/bridge/node_shims.ts). `crypto`/`node:crypto` and `zlib`/`node:zlib`
+# deliberately NOT aliased — workerd's native implementations are the real
+# hot path (AES/hashes; GZIPPacked's unzipSync for compressed MTProto
+# responses).
+[alias]
+"fs" = "./src/bridge/node_shims.ts"
+"node:fs" = "./src/bridge/node_shims.ts"
+"path" = "./src/bridge/node_shims.ts"
+"node:path" = "./src/bridge/node_shims.ts"
+"os" = "./src/bridge/node_shims.ts"
+"node:os" = "./src/bridge/node_shims.ts"
+"net" = "./src/bridge/node_shims.ts"
+"node:net" = "./src/bridge/node_shims.ts"
+"events" = "./src/bridge/node_shims.ts"
+"node:events" = "./src/bridge/node_shims.ts"
+"util" = "./src/bridge/node_shims.ts"
+"node:util" = "./src/bridge/node_shims.ts"
+"node-localstorage" = "./src/bridge/node_shims.ts"
+
+[observability]
+enabled = true
