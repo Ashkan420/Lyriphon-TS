@@ -26,6 +26,7 @@ data/
 .idea/
 .vscode/
 .mimocode/
+.claude/
 
 # Misc artifacts
 Lyriphon.zip
