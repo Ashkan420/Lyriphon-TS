@@ -68,6 +68,9 @@ export async function setAutoFetchEnabled(db: D1Database, enabled: boolean): Pro
 
 export const SETTING_USER_AUTOFETCH_PREFIX = "pref_autofetch:";
 export const SETTING_USER_PREVIEW_PREFIX = "pref_preview:";
+// Opt-in experimental rich `tg-button` style for Telegraph links (default off:
+// older Telegram clients don't render rich buttons).
+export const SETTING_USER_RICH_BUTTON_PREFIX = "pref_rich_button:";
 
 export async function isUserAutoFetchEnabled(db: D1Database, userId: string): Promise<boolean> {
   return (await getSetting(db, `${SETTING_USER_AUTOFETCH_PREFIX}${userId}`)) !== "0";
@@ -83,4 +86,12 @@ export async function getUserLinkPreviewEnabled(db: D1Database, userId: string):
 
 export async function setUserLinkPreviewEnabled(db: D1Database, userId: string, enabled: boolean): Promise<void> {
   await setSetting(db, `${SETTING_USER_PREVIEW_PREFIX}${userId}`, enabled ? "1" : "0");
+}
+
+export async function isUserRichButtonEnabled(db: D1Database, userId: string): Promise<boolean> {
+  return (await getSetting(db, `${SETTING_USER_RICH_BUTTON_PREFIX}${userId}`)) === "1";
+}
+
+export async function setUserRichButtonEnabled(db: D1Database, userId: string, enabled: boolean): Promise<void> {
+  await setSetting(db, `${SETTING_USER_RICH_BUTTON_PREFIX}${userId}`, enabled ? "1" : "0");
 }

@@ -10,6 +10,7 @@ import {
   setUserAutoFetchEnabled,
   getUserLinkPreviewEnabled,
   setUserLinkPreviewEnabled,
+  isUserRichButtonEnabled,
   isAutoFetchEnabled,
   setAutoFetchEnabled,
 } from "../src/db/settings";
@@ -92,22 +93,29 @@ describe("user preference helpers", () => {
 
 describe("settings UI", () => {
   it("keyboard uses green when on and red when off, with stable callback ids", () => {
-    const on = buildSettingsKeyboard(true, false, true);
+    const on = buildSettingsKeyboard(true, false, true, false);
     expect(on[0][0]).toMatchObject({ text: "🎧 Auto-get music files: ON", style: "success", callback_data: "settings_toggle_autofetch" });
     expect(on[1][0]).toMatchObject({ text: "🔗 Link previews: ON", style: "success", callback_data: "settings_toggle_preview" });
+    expect(on[2][0]).toMatchObject({ text: "🧪 Fancy lyrics buttons: OFF", style: "danger", callback_data: "settings_toggle_rich_button" });
 
-    const off = buildSettingsKeyboard(false, true, false);
+    const off = buildSettingsKeyboard(false, true, false, true);
     expect(off[0][0]).toMatchObject({ text: "🎧 Auto-get music files: OFF", style: "danger" });
     expect(off[1][0]).toMatchObject({ text: "🔗 Link previews: OFF", style: "danger" });
+    expect(off[2][0]).toMatchObject({ text: "🧪 Fancy lyrics buttons: ON", style: "success" });
   });
 
   it("text is plain-language and carries the global-off notice", () => {
-    const normal = buildSettingsText(true, false, true);
+    const normal = buildSettingsText(true, false, true, false);
     expect(normal).toContain("Auto-get music files");
     expect(normal).toContain("I fetch the audio for you automatically");
     expect(normal).toContain("preview card");
+    expect(normal).toContain("regular buttons that work everywhere");
 
-    const globalOff = buildSettingsText(false, true, true);
+    const richOn = buildSettingsText(true, false, true, true);
+    expect(richOn).toContain("Fancy lyrics buttons: <b>on</b>");
+    expect(richOn).toContain("only the newest Telegram apps");
+
+    const globalOff = buildSettingsText(false, true, true, false);
     expect(globalOff).toContain("temporarily unavailable");
     expect(globalOff).toContain("turned off for everyone");
   });
@@ -152,6 +160,17 @@ describe("settings callbacks", () => {
     expect(await getUserLinkPreviewEnabled(db, "555")).toBe(false);
     const render = ctx.editMessageText.mock.calls[0][0] as string;
     expect(render).toContain("Link previews: <b>off</b>");
+  });
+
+  it("rich button toggle flips the pref from its off default", async () => {
+    ctx.callbackQuery.data = "settings_toggle_rich_button";
+    expect(await isUserRichButtonEnabled(db, "555")).toBe(false);
+
+    await handleSettingsCallback(ctx, makeEnv(db));
+
+    expect(await isUserRichButtonEnabled(db, "555")).toBe(true);
+    const render = ctx.editMessageText.mock.calls[0][0] as string;
+    expect(render).toContain("Fancy lyrics buttons: <b>on</b>");
   });
 
   it("command renders current prefs", async () => {

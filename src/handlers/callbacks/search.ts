@@ -7,7 +7,7 @@ import { safeAnswer, safeDelete, attachAudioAndPromptChannel } from "../../utils
 import {
   TrackProgressReporter,
   buildTrackResultRichHtml,
-  sendRichTrackResult,
+  buildTelegraphKeyboardRow,
   countLyricLines,
 } from "../../utils/richMessages";
 import { log, previewText, warn } from "../../utils/logger";
@@ -21,7 +21,7 @@ import { Env } from "../../env";
 import { analyzeLanguages } from "../../services/translation/language-analyzer";
 import { buildEditMenu, resetTranslationState } from "./index";
 import { MESSAGE_EFFECT_CONFETTI, AUTOFETCH_MAX_PENDING_PER_USER } from "../../config";
-import { isAutoFetchEnabled, isUserAutoFetchEnabled, getUserLinkPreviewEnabled } from "../../db/settings";
+import { isAutoFetchEnabled, isUserAutoFetchEnabled, getUserLinkPreviewEnabled, isUserRichButtonEnabled } from "../../db/settings";
 import {
   countPendingByUser,
   createAudioRequest,
@@ -52,23 +52,19 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     return;
   }
   const baseMessageId = ctx.callbackQuery?.message?.message_id;
-  const progress = new TrackProgressReporter(
-    ctx.api,
-    chatId,
-    baseMessageId,
-    ctx.chat?.type === "private",
-  );
-
-  await progress.update({ stage: "info" });
+  const progress = new TrackProgressReporter(ctx.api, chatId, baseMessageId);
+  await progress.start();
   if (progress.isDead) {
     return;
   }
+
   const trackData = await getTrack(trackId) as any;
   if (!trackData) {
     log("track pipeline: failed to fetch Deezer track", trackId);
     await progress.fail("❌ Failed to fetch track info. Try again later.");
     return;
   }
+
 
   const trackName = trackData.title ?? "Unknown Track";
   const artistName = trackData.artist?.name ?? "Unknown Artist";
@@ -241,8 +237,10 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   // fallback it keeps controlling the Telegraph link preview card.
   const showPreviews = await getUserLinkPreviewEnabled(env.DB, requesterId).catch(() => true);
   const previewOption = { link_preview_options: { is_disabled: !showPreviews } } as any;
+  // Experimental styled tg-button inside the card vs the regular inline
+  // keyboard button every client renders. Opt-in, default off.
+  const useRichButton = await isUserRichButtonEnabled(env.DB, requesterId).catch(() => false);
 
-  const editMenuMarkup = { inline_keyboard: buildEditMenu() };
   const richHtml = buildTrackResultRichHtml({
     trackName,
     artistName,
@@ -255,52 +253,46 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     coverUrl: albumCoverUrl,
     includeCover: showPreviews,
     hasAudio,
+    useRichButton,
   });
+  const editMenu = buildEditMenu();
+  const finalKeyboard = useRichButton
+    ? editMenu
+    : [buildTelegraphKeyboardRow(telegraphResult.url), ...editMenu];
 
-  const sentRich = await sendRichTrackResult(
-    ctx.api,
-    chatId,
-    richHtml,
-    editMenuMarkup,
-    MESSAGE_EFFECT_CONFETTI,
-  );
-  if (sentRich) {
-    // Delete the progress message on success
-    const messageId = ctx.callbackQuery?.message?.message_id;
-    if (messageId) {
-      await safeDelete(ctx.api, chatId, messageId);
-    }
-  } else {
-    // Confetti effect might fail (non-private chat or API rejection)
-    // Fall back to sending without effect
+  // One message from selection to result: the final card is an edit of the
+  // progress message. False → the rich channel is gone; fall back to the
+  // plain-HTML send chain.
+  const finalized = await progress.finalize(richHtml, { inline_keyboard: finalKeyboard });
+  if (!finalized) {
     try {
       await ctx.api.sendMessage(chatId, replyText, {
         parse_mode: "HTML",
-        reply_markup: editMenuMarkup,
+        reply_markup: { inline_keyboard: finalKeyboard },
         message_effect_id: MESSAGE_EFFECT_CONFETTI,
         ...previewOption,
       });
-      const messageId = ctx.callbackQuery?.message?.message_id;
-      if (messageId) {
+      const messageId = progress.activeMessageId;
+      if (messageId !== undefined) {
         await safeDelete(ctx.api, chatId, messageId);
       }
     } catch (fallbackError) {
-      // If send fails too, try to edit the existing message
+      // Confetti effect might fail (non-private chat or API rejection)
       try {
         await ctx.api.sendMessage(chatId, replyText, {
           parse_mode: "HTML",
-          reply_markup: editMenuMarkup,
+          reply_markup: { inline_keyboard: finalKeyboard },
           ...previewOption,
         });
-        const messageId = ctx.callbackQuery?.message?.message_id;
-        if (messageId) {
+        const messageId = progress.activeMessageId;
+        if (messageId !== undefined) {
           await safeDelete(ctx.api, chatId, messageId);
         }
       } catch (finalError) {
         try {
           await ctx.editMessageText(replyText, {
             parse_mode: "HTML",
-            reply_markup: editMenuMarkup,
+            reply_markup: { inline_keyboard: finalKeyboard },
             ...previewOption,
           });
         } catch (editError) {

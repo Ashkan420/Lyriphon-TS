@@ -26,7 +26,8 @@ import {
   setRequestStatus,
   expireStalePending,
 } from "../db/audioRequests";
-import { getSetting, setSetting, SETTING_BRIDGE_LAST_AUDIO, SETTING_PENDING_SEND_PREFIX } from "../db/settings";
+import { getSetting, setSetting, SETTING_BRIDGE_LAST_AUDIO, SETTING_PENDING_SEND_PREFIX, isUserRichButtonEnabled } from "../db/settings";
+import { sendRichTelegraphButton } from "../utils/richMessages";
 import { AUTOFETCH_REQUEST_TTL_SECONDS } from "../config";
 import { setTrackFileId } from "../db/tracks";
 import { getUserChannels } from "../db/channels";
@@ -169,6 +170,17 @@ async function deliverFile(env: Env, audio: any, token: string): Promise<void> {
   }
 
   await setRequestStatus(env.DB, token, "delivered");
+  // Same experimental rich button as attachAudioAndPromptChannel, so bridge
+  // deliveries match the manual-attach look for opted-in users.
+  if (row.telegraph_url) {
+    try {
+      if (await isUserRichButtonEnabled(env.DB, row.user_id)) {
+        await sendRichTelegraphButton(api, row.chat_id, row.telegraph_url);
+      }
+    } catch (error) {
+      warn("bridge: rich telegraph button failed", error);
+    }
+  }
   // Canonical file_id for the tracks store — enables reuse + Replace Audio.
   try {
     await setTrackFileId(env.DB, row.track_id, audio.file_id);

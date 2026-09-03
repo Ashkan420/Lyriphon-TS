@@ -1,12 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   escapeRichHtml,
   countLyricLines,
   renderTrackProgressHtml,
   buildTrackResultRichHtml,
+  buildTelegraphKeyboardRow,
   TrackProgressReporter,
-  type TrackProgressState,
 } from "../src/utils/richMessages";
+import { setUserRichButtonEnabled, isUserRichButtonEnabled } from "../src/db/settings";
 
 describe("escapeRichHtml", () => {
   it("escapes HTML-significant characters", () => {
@@ -35,12 +36,14 @@ describe("countLyricLines", () => {
 });
 
 describe("renderTrackProgressHtml", () => {
-  it("renders an all-unchecked checklist with the info thinking block", () => {
+  it("renders an all-unchecked checklist with the info status line", () => {
     const html = renderTrackProgressHtml({ stage: "info" });
-    expect(html).toContain("<tg-thinking>Fetching track info…</tg-thinking>");
+    expect(html).toContain("⏳ Fetching track info…");
     expect((html.match(/<input type="checkbox">/g) ?? []).length).toBe(4);
     expect(html).not.toContain("checked");
     expect(html).not.toContain("<h3>");
+    // tg-thinking is drafts-only and rejected in persisted messages.
+    expect(html).not.toContain("tg-thinking");
   });
 
   it("checks completed stages and names the current one", () => {
@@ -54,7 +57,7 @@ describe("renderTrackProgressHtml", () => {
     expect(html).toContain("<h3>🎵 Song &lt;One&gt;</h3>");
     expect(html).toContain("<b>Artist</b> · <i>Album</i> · 2020-03-20");
     expect((html.match(/<input type="checkbox" checked>/g) ?? []).length).toBe(2);
-    expect(html).toContain("<tg-thinking>Fetching lyrics…</tg-thinking>");
+    expect(html).toContain("⏳ Fetching lyrics…");
   });
 
   it("renders the lyrics note and hides Unknown release dates", () => {
@@ -67,7 +70,7 @@ describe("renderTrackProgressHtml", () => {
     });
     expect(html).toContain("Lyrics — 42 lines (cached)");
     expect(html).not.toContain("Unknown");
-    expect(html).toContain("<tg-thinking>Creating Telegraph page…</tg-thinking>");
+    expect(html).toContain("⏳ Creating Telegraph page…");
   });
 });
 
@@ -84,9 +87,10 @@ describe("buildTrackResultRichHtml", () => {
     coverUrl: "https://e-cdns-images.dzcdn.net/cover.jpg",
     includeCover: true,
     hasAudio: false,
+    useRichButton: false,
   };
 
-  it("renders the full card", () => {
+  it("renders the full card with the keyboard-button variant by default", () => {
     const html = buildTrackResultRichHtml(base);
     expect(html).toContain('<img src="https://e-cdns-images.dzcdn.net/cover.jpg"/>');
     expect(html).toContain("<h2>🎵 Song</h2>");
@@ -95,7 +99,13 @@ describe("buildTrackResultRichHtml", () => {
     expect(html).toContain("<cite>Created by User</cite>");
     expect(html).toContain("✅ Lyrics attached — <b>42</b> lines ready.");
     expect(html).toContain("<footer>🎧 Send a music file to attach the Lyrics button to it.</footer>");
+    expect(html).not.toContain("tg-button");
+  });
+
+  it("uses the experimental tg-button-row when opted in", () => {
+    const html = buildTrackResultRichHtml({ ...base, useRichButton: true });
     expect(html).toContain('<tg-button type="url" style="primary" url="https://telegra.ph/abc">');
+    expect(html).toContain('<tg-button-row align="center">');
   });
 
   it("omits the cover when previews are disabled or the url is not an image", () => {
@@ -110,10 +120,22 @@ describe("buildTrackResultRichHtml", () => {
   });
 });
 
+describe("buildTelegraphKeyboardRow", () => {
+  it("builds a regular URL button every client renders", () => {
+    expect(buildTelegraphKeyboardRow("https://telegra.ph/abc")).toEqual([
+      { text: "📖 Open Telegraph Page", url: "https://telegra.ph/abc" },
+    ]);
+  });
+});
+
 describe("TrackProgressReporter", () => {
   function makeApi() {
     const calls: Array<{ method: string; args: unknown[] }> = [];
     const api: any = {
+      sendRichMessage: (...args: unknown[]) => {
+        calls.push({ method: "sendRichMessage", args });
+        return Promise.resolve({ message_id: 777 });
+      },
       sendRichMessageDraft: (...args: unknown[]) => {
         calls.push({ method: "sendRichMessageDraft", args });
         return Promise.resolve(true);
@@ -122,78 +144,197 @@ describe("TrackProgressReporter", () => {
         calls.push({ method: "editMessageText", args });
         return Promise.resolve(true);
       },
+      deleteMessage: (...args: unknown[]) => {
+        calls.push({ method: "deleteMessage", args });
+        return Promise.resolve(true);
+      },
     };
     return { api, calls };
   }
 
-  it("streams drafts in draft mode", async () => {
+  it("start() posts one persistent rich message and deletes the results message", async () => {
     const { api, calls } = makeApi();
-    const reporter = new TrackProgressReporter(api, 1, 10, true);
-    await reporter.update({ stage: "info" });
-    await reporter.update({ stage: "metadata", trackName: "Song" });
+    const reporter = new TrackProgressReporter(api, 1, 10);
+    await reporter.start();
 
-    expect(calls.every((c) => c.method === "sendRichMessageDraft")).toBe(true);
-    expect(calls.length).toBe(2);
-    // Same draft id across states so Telegram animates the diff.
-    expect(calls[0].args[1]).toBe(10);
-    expect(calls[1].args[1]).toBe(10);
+    expect(calls[0].method).toBe("sendRichMessage");
+    expect(calls[0].args[0]).toBe(1);
+    expect(calls[0].args[1]).toMatchObject({ html: expect.stringContaining("Fetch") });
+    expect(reporter.activeMessageId).toBe(777);
+    expect(calls[1]).toEqual({ method: "deleteMessage", args: [1, 10] });
   });
 
-  it("falls back to plain edits when drafts fail", async () => {
+  it("edits the same message through state updates — one message end to end", async () => {
     const { api, calls } = makeApi();
-    api.sendRichMessageDraft = (...args: unknown[]) => {
-      calls.push({ method: "sendRichMessageDraft", args });
-      return Promise.reject(new Error("no drafts here"));
-    };
-    const reporter = new TrackProgressReporter(api, 1, 10, true);
+    const reporter = new TrackProgressReporter(api, 1, 10);
+    await reporter.start();
+    calls.length = 0;
+
+    await reporter.update({ stage: "metadata", trackName: "Song" });
+    await reporter.update({ stage: "lyrics" });
+
+    expect(calls.every((c) => c.method === "editMessageText")).toBe(true);
+    // Both edits target the same rich message.
+    expect(calls[0].args[1]).toBe(777);
+    expect(calls[1].args[1]).toBe(777);
+    expect(calls[0].args[2]).toMatchObject({ html: expect.stringContaining("Fetching album metadata") });
+  });
+
+  it("skips updates whose content is identical (message-not-modified guard)", async () => {
+    const { api, calls } = makeApi();
+    const reporter = new TrackProgressReporter(api, 1, 10);
+    await reporter.start();
+    calls.length = 0;
 
     await reporter.update({ stage: "info" });
+    expect(calls.length).toBe(0);
+  });
+
+  it("falls back to plain edits on the original message when the rich send fails", async () => {
+    const { api, calls } = makeApi();
+    api.sendRichMessage = (...args: unknown[]) => {
+      calls.push({ method: "sendRichMessage", args });
+      return Promise.reject(new Error("method not found"));
+    };
+    const reporter = new TrackProgressReporter(api, 1, 10);
+
+    await reporter.start();
     await reporter.update({ stage: "metadata" });
 
-    expect(calls[0].method).toBe("sendRichMessageDraft");
-    expect(calls.slice(1).every((c) => c.method === "editMessageText")).toBe(true);
+    expect(reporter.activeMessageId).toBe(10);
+    expect(calls[1].method).toBe("editMessageText");
     expect(calls[1].args[2]).toBe("⏳ Fetching track info...");
     expect(calls[2].args[2]).toBe("⏳ Fetching metadata...");
   });
 
   it("marks the request dead once the fallback edit fails and stops updating", async () => {
     const { api, calls } = makeApi();
+    api.sendRichMessage = (...args: unknown[]) => {
+      calls.push({ method: "sendRichMessage", args });
+      return Promise.reject(new Error("method not found"));
+    };
     api.editMessageText = (...args: unknown[]) => {
       calls.push({ method: "editMessageText", args });
       return Promise.reject(new Error("message to edit not found"));
     };
-    const reporter = new TrackProgressReporter(api, 1, 10, false);
+    const reporter = new TrackProgressReporter(api, 1, 10);
 
-    await reporter.update({ stage: "info" });
+    await reporter.start();
     expect(reporter.isDead).toBe(true);
 
     await reporter.update({ stage: "metadata" });
-    expect(calls.length).toBe(1);
+    expect(calls.length).toBe(2);
   });
 
-  it("uses plain edits in non-private chats", async () => {
+  it("degrades to plain text edits when a mid-stream rich edit fails", async () => {
     const { api, calls } = makeApi();
-    const reporter = new TrackProgressReporter(api, 1, 10, false);
-    await reporter.update({ stage: "telegraph" });
-    expect(calls.length).toBe(1);
+    const reporter = new TrackProgressReporter(api, 1, 10);
+    await reporter.start();
+    calls.length = 0;
+
+    api.editMessageText = (chatId: unknown, messageId: unknown, payload: unknown, ...rest: unknown[]) => {
+      calls.push({ method: "editMessageText", args: [chatId, messageId, payload, ...rest] });
+      if (payload && typeof payload === "object" && "html" in (payload as any)) {
+        return Promise.reject(new Error("can't parse rich message"));
+      }
+      return Promise.resolve(true);
+    };
+
+    await reporter.update({ stage: "metadata" });
+    await reporter.update({ stage: "lyrics" });
+
+    // First update: rich edit fails → plain edit succeeds. Second: plain only.
+    expect(calls[0].args[2]).toMatchObject({ html: expect.anything() });
+    expect(calls[0].args[3]).toBeUndefined();
+    expect(calls[1].args[2]).toBe("⏳ Fetching metadata...");
+    expect(calls[2].args[2]).toBe("⏳ Fetching lyrics...");
+  });
+
+  it("finalize() turns the progress message into the result card with the keyboard", async () => {
+    const { api, calls } = makeApi();
+    const reporter = new TrackProgressReporter(api, 1, 10);
+    await reporter.start();
+    calls.length = 0;
+
+    const ok = await reporter.finalize("<h2>Card</h2>", { inline_keyboard: [] });
+    expect(ok).toBe(true);
     expect(calls[0].method).toBe("editMessageText");
-    expect(calls[0].args[2]).toBe("⏳ Creating Telegraph page...");
+    expect(calls[0].args[1]).toBe(777);
+    expect(calls[0].args[2]).toMatchObject({ html: "<h2>Card</h2>" });
+    expect(calls[0].args[3]).toMatchObject({ reply_markup: { inline_keyboard: [] } });
   });
 
-  it("fail() writes the error to the original message", async () => {
+  it("finalize() returns false in fallback mode so the caller sends plain HTML", async () => {
     const { api, calls } = makeApi();
-    const reporter = new TrackProgressReporter(api, 1, 10, true);
+    api.sendRichMessage = (...args: unknown[]) => {
+      calls.push({ method: "sendRichMessage", args });
+      return Promise.reject(new Error("method not found"));
+    };
+    const reporter = new TrackProgressReporter(api, 1, 10);
+    await reporter.start();
+    calls.length = 0;
+
+    const ok = await reporter.finalize("<h2>Card</h2>", { inline_keyboard: [] });
+    expect(ok).toBe(false);
+    expect(calls.length).toBe(0);
+  });
+
+  it("fail() writes the error to the active message", async () => {
+    const { api, calls } = makeApi();
+    const reporter = new TrackProgressReporter(api, 1, 10);
+    await reporter.start();
+    calls.length = 0;
+
     await reporter.fail("❌ boom");
     expect(calls).toEqual([
-      { method: "editMessageText", args: [1, 10, "❌ boom"] },
+      { method: "editMessageText", args: [1, 777, "❌ boom"] },
     ]);
   });
 });
 
-// Type-level sanity: the state builder accepts partial updates.
-describe("TrackProgressState", () => {
-  it("accepts a partial update object", () => {
-    const state: TrackProgressState = { stage: "info" };
-    expect(state.stage).toBe("info");
+describe("rich button setting", () => {
+  // Same KV stub pattern as test/settings.test.ts.
+  function fakeKvDb() {
+    const kv = new Map<string, string>();
+    return {
+      kv,
+      prepare(sql: string) {
+        return {
+          bind(key: string, value?: string) {
+            return {
+              async first<T>(): Promise<T | null> {
+                if (sql.includes("SELECT value FROM settings")) {
+                  const v = kv.get(key as string);
+                  return v === undefined ? null : ({ value: v } as unknown as T);
+                }
+                return null;
+              },
+              async all() { return { results: [] }; },
+              async run() {
+                if (sql.includes("INSERT INTO settings") && value !== undefined) {
+                  kv.set(key as string, value);
+                }
+              },
+            };
+          },
+          async all() { return { results: [] }; },
+          async run() {},
+        };
+      },
+    } as unknown as any;
+  }
+
+  let db: any;
+  beforeEach(() => {
+    db = fakeKvDb();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("defaults to OFF and persists flips", async () => {
+    expect(await isUserRichButtonEnabled(db, "u1")).toBe(false);
+    await setUserRichButtonEnabled(db, "u1", true);
+    expect(await isUserRichButtonEnabled(db, "u1")).toBe(true);
+    await setUserRichButtonEnabled(db, "u1", false);
+    expect(await isUserRichButtonEnabled(db, "u1")).toBe(false);
   });
 });

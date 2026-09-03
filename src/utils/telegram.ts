@@ -7,7 +7,9 @@ import { transition } from "../session/transitions";
 import { resetFlow } from "../session/flows";
 import { escapeMd as escapeMdUtil } from "./escapeMd";
 import { log, warn } from "./logger";
+import { sendRichTelegraphButton } from "./richMessages";
 import type { InlineKeyboardMarkup } from "@grammyjs/types";
+import { isUserRichButtonEnabled } from "../db/settings";
 
 export function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
@@ -178,6 +180,17 @@ export async function attachAudioAndPromptChannel(
   } catch {
     await bot.sendMessage(chatId, "❌ Failed to attach audio.");
     return null;
+  }
+
+  // Experimental styled rich button under the music file (opt-in via
+  // /settings; audio captions can't carry tg-buttons, so it rides as a
+  // one-line message below). Regular Lyrics button stays either way.
+  try {
+    if (await isUserRichButtonEnabled(db, userId)) {
+      await sendRichTelegraphButton(bot, chatId, telegraphUrl);
+    }
+  } catch (error) {
+    warn("rich telegraph button under audio failed", error);
   }
 
   session.audio.pendingFileId = fileId;

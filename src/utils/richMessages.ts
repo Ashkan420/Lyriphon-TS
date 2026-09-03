@@ -6,12 +6,13 @@ import { warn } from "./logger";
 
 // Rich-message helpers for the track pipeline (src/handlers/callbacks/search.ts).
 //
-// Private chats stream progress as rich-message drafts (sendRichMessageDraft):
-// each state update animates a diff of a small checklist + <tg-thinking> row,
-// the same visual language as Telegram's streamed-AI answers. Final results
-// are persisted with sendRichMessage — an album-cover card with a Telegraph
-// button. Everything degrades gracefully: draft failures fall back to plain
-// text edits, rich-send failures fall back to the caller's HTML message.
+// The whole pipeline lives in ONE persistent rich message: sendRichMessage
+// posts the initial checklist state, then every state transition is an
+// editMessageText with a new rich_message (Bot API 10.3), so the progress
+// bubble extends into the final Telegraph card. Everything degrades
+// gracefully: rich failures fall back to plain text edits of the original
+// results message, and a failed finalize lets the caller send its plain-HTML
+// message instead.
 
 // Escape raw track/artist/album text for Rich HTML content. Same rules as
 // regular HTML: & < > must be entities; " is escaped for attribute values.
@@ -59,7 +60,7 @@ const STAGE_ACTION: Record<TrackStage, string> = {
   telegraph: "Creating Telegraph page…",
 };
 
-// Plain-text states for non-draft chats (groups), matching the old flow.
+// Plain-text states for the non-rich fallback, matching the pre-rich flow.
 const PLAIN_STAGE_TEXT: Record<TrackStage, string> = {
   info: "⏳ Fetching track info...",
   metadata: "⏳ Fetching metadata...",
@@ -67,9 +68,9 @@ const PLAIN_STAGE_TEXT: Record<TrackStage, string> = {
   telegraph: "⏳ Creating Telegraph page...",
 };
 
-// The streamed checklist: stages before the current one are checked off,
-// the current one runs under a <tg-thinking> placeholder. Draft-only API —
-// <tg-thinking> must never appear in a persisted sendRichMessage.
+// The persisted progress view: stages before the current one are checked off,
+// the current one runs under a status line. <tg-thinking> is drafts-only and
+// rejected in persisted messages, so the live indicator is a text line.
 export function renderTrackProgressHtml(state: TrackProgressState): string {
   const parts: string[] = [];
 
@@ -98,56 +99,65 @@ export function renderTrackProgressHtml(state: TrackProgressState): string {
   });
   parts.push(`<ul>${items.join("")}</ul>`);
 
-  parts.push(`<tg-thinking>${STAGE_ACTION[state.stage]}</tg-thinking>`);
+  parts.push(`<p><i>⏳ ${STAGE_ACTION[state.stage]}</i></p>`);
 
   return parts.join("\n");
 }
 
-// Drives progress updates for one track request. In private chats every
-// update goes to the same draft_id so Telegram animates the transitions;
-// elsewhere (or once drafts fail) the original results message is edited
-// with plain text, exactly like the pre-rich flow.
+// Drives progress for one track request. Owns a single persistent rich
+// message from selection to the final Telegraph card; if the rich API is
+// unavailable it degrades to plain text edits of the original results
+// message, exactly like the pre-rich flow.
 export class TrackProgressReporter {
   private state: TrackProgressState = { stage: "info" };
-  private draftBroken = false;
+  private richMode = false;
+  private richBroken = false;
   private dead = false;
-  private readonly draftId: number;
+  private progressMessageId: number | undefined;
 
-  // True once every visible channel for this request is gone (results
-  // message deleted and drafts failing). Mirrors the old first-edit
-  // `catch { return; }` liveness gate in handleTrackSelectionCallback.
+  // True once every visible channel for this request is gone. Mirrors the
+  // old first-edit `catch { return; }` liveness gate in
+  // handleTrackSelectionCallback.
   get isDead(): boolean {
     return this.dead;
+  }
+
+  // The message currently carrying progress — the rich bubble once started,
+  // otherwise the original results message being edited in place.
+  get activeMessageId(): number | undefined {
+    return this.progressMessageId ?? this.fallbackMessageId;
   }
 
   constructor(
     private readonly api: Api<RawApi>,
     private readonly chatId: number,
     private readonly fallbackMessageId: number | undefined,
-    private readonly useDrafts: boolean,
-  ) {
-    // Derive the draft id from the results message: stable across all states
-    // of one request, distinct between concurrent requests in the same chat.
-    this.draftId = fallbackMessageId ?? 1;
-  }
+  ) {}
 
-  async update(next: Partial<TrackProgressState>): Promise<void> {
+  // Post the initial progress message (rich) or start editing the results
+  // message (plain fallback). The results message is consumed either way:
+  // in rich mode it is deleted, in plain mode it becomes the progress view.
+  async start(): Promise<void> {
     if (this.dead) {
       return;
     }
-    this.state = { ...this.state, ...next };
-
-    if (this.useDrafts && !this.draftBroken) {
-      try {
-        await this.api.sendRichMessageDraft(this.chatId, this.draftId, {
-          html: renderTrackProgressHtml(this.state),
-          skip_entity_detection: true,
-        });
-        return;
-      } catch (error) {
-        this.draftBroken = true;
-        warn("rich draft update failed, falling back to plain edits", error);
+    try {
+      const msg = await this.api.sendRichMessage(this.chatId, {
+        html: renderTrackProgressHtml(this.state),
+        skip_entity_detection: true,
+      });
+      this.richMode = true;
+      this.progressMessageId = msg.message_id;
+      if (this.fallbackMessageId !== undefined) {
+        try {
+          await this.api.deleteMessage(this.chatId, this.fallbackMessageId);
+        } catch {
+          // leftover results message; harmless
+        }
       }
+      return;
+    } catch (error) {
+      warn("rich progress send failed, falling back to plain edits", error);
     }
 
     if (this.fallbackMessageId !== undefined) {
@@ -160,30 +170,95 @@ export class TrackProgressReporter {
       } catch {
         this.dead = true;
       }
-    } else if (!this.useDrafts) {
-      // Nothing to edit and no draft channel — the request is invisible.
+    } else {
+      // Nothing to edit and no rich channel — the request is invisible.
       this.dead = true;
     }
   }
 
-  // Terminal failure: put the error on the original message in both modes
-  // (a live draft simply expires after its 30s preview window).
+  async update(next: Partial<TrackProgressState>): Promise<void> {
+    if (this.dead) {
+      return;
+    }
+    const prevState = this.state;
+    this.state = { ...this.state, ...next };
+
+    // Identical content would be rejected by the API ("message is not
+    // modified") and kill rich mode — skip when nothing changed.
+    if (JSON.stringify(prevState) === JSON.stringify(this.state)) {
+      return;
+    }
+
+    const html = renderTrackProgressHtml(this.state);
+
+    if (this.richMode && this.progressMessageId !== undefined && !this.richBroken) {
+      try {
+        await this.api.editMessageText(this.chatId, this.progressMessageId, {
+          html,
+          skip_entity_detection: true,
+        } satisfies InputRichMessage);
+        return;
+      } catch (error) {
+        this.richBroken = true;
+        warn("rich progress edit failed, falling back to plain text", error);
+      }
+    }
+
+    const targetId = this.richMode ? this.progressMessageId : this.fallbackMessageId;
+    if (targetId === undefined) {
+      this.dead = true;
+      return;
+    }
+    try {
+      await this.api.editMessageText(this.chatId, targetId, PLAIN_STAGE_TEXT[this.state.stage]);
+    } catch {
+      this.dead = true;
+    }
+  }
+
+  // Terminal failure: put the error on the active message.
   async fail(text: string): Promise<void> {
     if (this.dead) {
       return;
     }
-    if (this.fallbackMessageId !== undefined) {
-      try {
-        await this.api.editMessageText(this.chatId, this.fallbackMessageId, text);
-      } catch {
-        // ignore
-      }
+    const targetId = this.activeMessageId;
+    if (targetId === undefined) {
+      return;
+    }
+    try {
+      await this.api.editMessageText(this.chatId, targetId, text);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Persist the final card by editing the progress message in place — the
+  // last state IS the result. Returns false when the rich channel is gone so
+  // the caller can send its plain-HTML message instead.
+  async finalize(html: string, markup: InlineKeyboardMarkup): Promise<boolean> {
+    if (this.dead || !this.richMode || this.progressMessageId === undefined) {
+      return false;
+    }
+    try {
+      await this.api.editMessageText(
+        this.chatId,
+        this.progressMessageId,
+        { html, skip_entity_detection: true } satisfies InputRichMessage,
+        { reply_markup: markup },
+      );
+      return true;
+    } catch (error) {
+      warn("rich finalize edit failed, caller should fall back to HTML", error);
+      return false;
     }
   }
 }
 
 // The persisted result card. The album cover takes the role of the old
 // link-preview card, so it follows the same user preference (includeCover).
+// useRichButton switches the Telegraph link between the experimental styled
+// tg-button inside the card and a regular inline-keyboard button (caller
+// appends that row itself — see buildTrackResultKeyboard).
 export function buildTrackResultRichHtml(options: {
   trackName: string;
   artistName: string;
@@ -196,6 +271,7 @@ export function buildTrackResultRichHtml(options: {
   coverUrl: string;
   includeCover: boolean;
   hasAudio: boolean;
+  useRichButton: boolean;
 }): string {
   const parts: string[] = [];
 
@@ -233,44 +309,46 @@ export function buildTrackResultRichHtml(options: {
     parts.push(`<footer>🎧 Send a music file to attach the Lyrics button to it.</footer>`);
   }
 
-  parts.push(
-    `<tg-button-row align="center">` +
-      `<tg-button type="url" style="primary" url="${escapeRichHtml(options.telegraphUrl)}">` +
-      `📖 Open Telegraph Page` +
-      `</tg-button>` +
-      `</tg-button-row>`,
-  );
+  if (options.useRichButton) {
+    parts.push(telegraphButtonRowHtml(options.telegraphUrl, "📖 Open Telegraph Page"));
+  }
 
   return parts.join("\n");
 }
 
-// Persist the rich result card, retrying once without the message effect
-// (effects are private-chat only). Returns false so the caller can fall back
-// to its plain-HTML message path.
-export async function sendRichTrackResult(
+// Experimental styled rich button. Older Telegram clients don't render it at
+// all, so it is opt-in via the "Fancy lyrics buttons" setting (default off);
+// the default path is a regular inline-keyboard URL button.
+function telegraphButtonRowHtml(url: string, label: string): string {
+  return (
+    `<tg-button-row align="center">` +
+      `<tg-button type="url" style="primary" url="${escapeRichHtml(url)}">${label}</tg-button>` +
+    `</tg-button-row>`
+  );
+}
+
+// First keyboard row for the default (non-rich-button) card: a regular URL
+// button every Telegram client renders.
+export function buildTelegraphKeyboardRow(url: string) {
+  return [{ text: "📖 Open Telegraph Page", url }];
+}
+
+// One-line rich message with just the styled Telegraph button, sent under a
+// music file when the "Fancy lyrics buttons" setting is on (the audio
+// message itself can't carry tg-buttons — captions have no rich content).
+export async function sendRichTelegraphButton(
   api: Api<RawApi>,
   chatId: number,
-  html: string,
-  markup: InlineKeyboardMarkup,
-  effectId?: string,
+  url: string,
 ): Promise<boolean> {
-  const rich: InputRichMessage = { html, skip_entity_detection: true };
-  if (effectId) {
-    try {
-      await api.sendRichMessage(chatId, rich, {
-        reply_markup: markup,
-        message_effect_id: effectId,
-      });
-      return true;
-    } catch (error) {
-      warn("rich result with effect failed, retrying without", error);
-    }
-  }
   try {
-    await api.sendRichMessage(chatId, rich, { reply_markup: markup });
+    await api.sendRichMessage(chatId, {
+      html: telegraphButtonRowHtml(url, "📖 Lyrics"),
+      skip_entity_detection: true,
+    });
     return true;
   } catch (error) {
-    warn("sendRichMessage failed, caller should fall back to HTML", error);
+    warn("rich telegraph button send failed", error);
     return false;
   }
 }
