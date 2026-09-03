@@ -60,3 +60,27 @@ export async function isAutoFetchEnabled(db: D1Database): Promise<boolean> {
 export async function setAutoFetchEnabled(db: D1Database, enabled: boolean): Promise<void> {
   await setSetting(db, SETTING_AUTOFETCH_ENABLED, enabled ? "1" : "0");
 }
+
+// ── Per-user preferences ────────────────────────────────────────────────────
+//
+// Stored on the same KV, keyed by user id. Defaults live in the getters so a
+// missing row means "on" — both prefs are opt-out.
+
+export const SETTING_USER_AUTOFETCH_PREFIX = "pref_autofetch:";
+export const SETTING_USER_PREVIEW_PREFIX = "pref_preview:";
+
+export async function isUserAutoFetchEnabled(db: D1Database, userId: string): Promise<boolean> {
+  return (await getSetting(db, `${SETTING_USER_AUTOFETCH_PREFIX}${userId}`)) !== "0";
+}
+
+export async function setUserAutoFetchEnabled(db: D1Database, userId: string, enabled: boolean): Promise<void> {
+  await setSetting(db, `${SETTING_USER_AUTOFETCH_PREFIX}${userId}`, enabled ? "1" : "0");
+}
+
+export async function getUserLinkPreviewEnabled(db: D1Database, userId: string): Promise<boolean> {
+  return (await getSetting(db, `${SETTING_USER_PREVIEW_PREFIX}${userId}`)) !== "0";
+}
+
+export async function setUserLinkPreviewEnabled(db: D1Database, userId: string, enabled: boolean): Promise<void> {
+  await setSetting(db, `${SETTING_USER_PREVIEW_PREFIX}${userId}`, enabled ? "1" : "0");
+}

@@ -15,7 +15,7 @@ import { Env } from "../../env";
 import { analyzeLanguages } from "../../services/translation/language-analyzer";
 import { buildEditMenu, resetTranslationState } from "./index";
 import { MESSAGE_EFFECT_CONFETTI, AUTOFETCH_MAX_PENDING_PER_USER } from "../../config";
-import { isAutoFetchEnabled } from "../../db/settings";
+import { isAutoFetchEnabled, isUserAutoFetchEnabled, getUserLinkPreviewEnabled } from "../../db/settings";
 import {
   countPendingByUser,
   createAudioRequest,
@@ -217,12 +217,18 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     return;
   }
 
+  // Respect the user's link-preview preference (via /settings) on the
+  // result message — the only place a Telegraph link renders as a card.
+  const showPreviews = await getUserLinkPreviewEnabled(env.DB, requesterId).catch(() => true);
+  const previewOption = { link_preview_options: { is_disabled: !showPreviews } } as any;
+
   // Try to send new message with confetti effect
   try {
     await ctx.api.sendMessage(chatId, replyText, {
       parse_mode: "HTML",
       reply_markup: { inline_keyboard: buildEditMenu() },
       message_effect_id: MESSAGE_EFFECT_CONFETTI,
+      ...previewOption,
     });
     // Delete the progress message on success
     const messageId = ctx.callbackQuery?.message?.message_id;
@@ -236,6 +242,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
       await ctx.api.sendMessage(chatId, replyText, {
         parse_mode: "HTML",
         reply_markup: { inline_keyboard: buildEditMenu() },
+        ...previewOption,
       });
       const messageId = ctx.callbackQuery?.message?.message_id;
       if (messageId) {
@@ -247,6 +254,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
         await ctx.editMessageText(replyText, {
           parse_mode: "HTML",
           reply_markup: { inline_keyboard: buildEditMenu() },
+          ...previewOption,
         });
       } catch (editError) {
         warn("Failed to send or edit final result", editError);
@@ -340,6 +348,11 @@ async function enqueueAutoFetch(
       return undefined;
     }
     if (!(await isAutoFetchEnabled(env.DB))) {
+      return undefined;
+    }
+    // Per-user opt-out (via /settings) on top of the global admin switch.
+    if (!(await isUserAutoFetchEnabled(env.DB, userId))) {
+      log("autofetch: user has auto-fetch off", userId);
       return undefined;
     }
     // Materialize TTL expiry first so stale rows (jobs whose delivery never

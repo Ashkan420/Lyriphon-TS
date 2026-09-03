@@ -14,6 +14,7 @@ import { safeDelete, cancelEdit } from "./utils/telegram";
 import { clearAudioState } from "./session/flows";
 import { warn, formatLogsForTelegram } from "./utils/logger";
 import { adminCommand, handleAdminCallback, isBotOwner } from "./handlers/admin";
+import { handleSettingsCommand } from "./handlers/settings";
 
 export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
   const bot = new Bot<Context>(env.BOT_TOKEN);
@@ -31,6 +32,10 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
 
   bot.command("help", async (ctx) => {
     await helpCommand(ctx);
+  });
+
+  bot.command("settings", async (ctx) => {
+    await handleSettingsCommand(ctx, env);
   });
 
   bot.command("song", async (ctx) => {
