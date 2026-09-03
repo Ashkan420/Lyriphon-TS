@@ -63,7 +63,7 @@ export async function handleAudioDecisionCallback(ctx: Context, session: Session
       }
     }
 
-    session.telegraph.url = undefined;
+    // Telegraph stays live so the user can still attach a different file.
     if (isStale(session, captureVersion(session))) {
       return;
     }

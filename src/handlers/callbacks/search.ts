@@ -62,13 +62,15 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   const trackRecord = await getTrackRecord(env.DB, trackId);
 
   // Auto-fetch via the deezload bridge — queued as soon as the song id is
-  // known, but only for songs we don't already have a file for. The 🎧
-  // message is deferred until after the Telegraph result (it needs the
-  // result to exist so the audio arrives into a complete presentation).
+  // known, but only when the user did NOT provide their own audio (that file
+  // gets attached below; a bridge/cache file on top would double-attach) and
+  // we don't already have the file stored. The 🎧 message is deferred until
+  // after the Telegraph result.
   const requesterId = String(ctx.from?.id ?? "");
   const requesterChatId = ctx.chat?.id;
+  const userProvidedAudio = Boolean(session.audio.fileId);
   let queuedPosition: number | undefined;
-  const shouldAutoFetch = requesterChatId && !trackRecord?.file_id;
+  const shouldAutoFetch = requesterChatId && !trackRecord?.file_id && !userProvidedAudio;
   if (shouldAutoFetch) {
     const queued = await enqueueAutoFetch(
       env, requesterId, requesterChatId, trackId, trackName, artistName,
@@ -266,7 +268,9 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     }
   }
 
-  // Already have this song's file? Re-send it now — no deezload round-trip.
+  // Already have this song's file (and the user didn't bring their own)?
+  // Re-send it now — no deezload round-trip. The telegraph stays live so
+  // the user can still send another file to replace it.
   if (!hasAudio && trackRecord?.file_id) {
     log("track pipeline: reusing stored audio for track", trackId);
     const caption = await attachAudioAndPromptChannel(
@@ -282,7 +286,6 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     );
     if (caption) {
       clearAudioState(session);
-      session.telegraph.url = undefined;
     }
   }
 
@@ -318,7 +321,6 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     }
 
     clearAudioState(session);
-    session.telegraph.url = undefined;
   }
 }
 
