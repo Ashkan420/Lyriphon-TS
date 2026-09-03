@@ -27,7 +27,12 @@ export async function getCachedFinglish(db: D1Database, farsi: string): Promise<
 
 export async function cacheFinglish(db: D1Database, farsi: string, finglish: string): Promise<void> {
   await ensureTable(db);
-  await db.prepare("INSERT OR IGNORE INTO transliterations (farsi, finglish) VALUES (?, ?)")
+  // Upsert, not INSERT OR IGNORE: transliterateFarsi also uses this to heal
+  // cache rows poisoned by earlier JSON-blob responses (same PK re-written).
+  await db.prepare(`
+    INSERT INTO transliterations (farsi, finglish) VALUES (?, ?)
+    ON CONFLICT(farsi) DO UPDATE SET finglish = excluded.finglish
+  `)
     .bind(farsi, finglish)
     .run();
 }
