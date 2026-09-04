@@ -100,37 +100,46 @@ function allLogs(): LogEntry[] {
   return entries.sort((a, b) => a.ts - b.ts);
 }
 
-export function formatLogsForTelegram(limit = 40): string {
+// Telegram message limit is 4096 chars; stay under it so entries carrying
+// full lyrics/translations survive intact instead of being truncated away.
+const LOG_CHUNK_MAX = 3800;
+
+export function formatLogsForTelegram(limit = 40): string[] {
   const logs = allLogs().slice(-limit);
   if (logs.length === 0) {
-    return "📋 No logs yet.";
+    return ["📋 No logs yet."];
   }
 
+  const header = `📋 Recent logs (${logs.length})\n`;
   const lines = logs.map((entry) => {
     const time = new Date(entry.ts).toLocaleTimeString("en-US", { hour12: false });
     const levelTag = entry.level === "debug" ? "DBG" : entry.level.toUpperCase();
     return `${time} [${levelTag}] ${entry.text}`;
   });
 
-  const header = `📋 Recent logs (${logs.length})\n`;
-  const body = lines.join("\n");
-
-  // Telegram message limit is 4096 characters
-  if (header.length + body.length <= 4096) {
-    return header + body;
-  }
-
-  // Truncate from the top, keep newest
-  let truncated = header;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const candidate = truncated + lines[i] + "\n";
-    if (candidate.length > 4000) {
-      truncated += `\n... (${lines.length - i} older entries truncated)`;
-      break;
+  // Pack entries into chunks at entry boundaries; a single entry larger than
+  // a whole chunk (full lyrics dump) is hard-split so nothing is dropped.
+  const chunks: string[] = [];
+  let current = header;
+  for (const line of lines) {
+    let entry = line + "\n";
+    if (current.length + entry.length <= LOG_CHUNK_MAX) {
+      current += entry;
+      continue;
     }
-    truncated = candidate;
+    if (current.trim()) {
+      chunks.push(current);
+    }
+    while (entry.length > LOG_CHUNK_MAX) {
+      chunks.push(entry.slice(0, LOG_CHUNK_MAX));
+      entry = entry.slice(LOG_CHUNK_MAX);
+    }
+    current = entry;
   }
-  return truncated;
+  if (current.trim()) {
+    chunks.push(current);
+  }
+  return chunks;
 }
 
 export function setDebug(enabled: boolean): void {

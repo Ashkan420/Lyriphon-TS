@@ -1,6 +1,7 @@
 import { Context } from "grammy";
 import { safeAnswer, safeEditMessage, safeDelete, cancelEdit } from "../../utils/telegram";
 import { isValidUrl } from "../../utils/urlValidation";
+import { normalizeLyrics } from "../../utils/lyrics";
 import { transition } from "../../session/transitions";
 import { resetFlow, SessionMode, captureVersion, isStale } from "../../session/index";
 import { SessionData } from "../../session/types";
@@ -190,7 +191,7 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env): Pro
 
   await safeAnswer(ctx);
 
-  const fullLyrics = session.lyrics.buffer.join("\n");
+  const fullLyrics = normalizeLyrics(session.lyrics.buffer.join("\n"));
   const cid = chatId(ctx);
   if (cid) {
     for (const msgId of session.lyrics.messageIds) {

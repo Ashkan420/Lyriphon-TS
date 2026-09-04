@@ -4,6 +4,7 @@ import { getLyrics } from "../../services/lrclib";
 import { createSongTelegraph } from "../../services/telegraph";
 import { getTrackRecord, upsertTrack, setTrackFileId } from "../../db/tracks";
 import { safeAnswer, safeDelete, attachAudioAndPromptChannel } from "../../utils/telegram";
+import { normalizeLyrics } from "../../utils/lyrics";
 import {
   TrackProgressReporter,
   buildTrackResultHtml,
@@ -117,11 +118,21 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   let lyrics: string;
   let lyricLineCount = 0;
   if (cached !== null) {
-    lyrics = cached;
+    lyrics = normalizeLyrics(cached);
     lyricLineCount = countLyricLines(lyrics);
     // Heal backfilled rows: fill metadata the legacy table never had.
     if (!trackRecord?.title || !trackRecord?.artist) {
       await upsertTrack(env.DB, { trackId, title: trackName, artist: artistName });
+    }
+    // Heal rows cached before edge-newline normalization: old LRCLIB data
+    // carried trailing/leading newlines that broke translation line counts.
+    if (lyrics !== cached) {
+      try {
+        await upsertTrack(env.DB, { trackId, lyrics });
+        log("track pipeline: lyrics cache healed (edge newlines stripped) for track", trackId);
+      } catch (error) {
+        warn("track pipeline: lyrics cache heal failed", error);
+      }
     }
     log(
       "track pipeline: lyrics cache HIT for track",

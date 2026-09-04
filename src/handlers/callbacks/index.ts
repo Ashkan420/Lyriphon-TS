@@ -73,7 +73,13 @@ export function getDisplayLyrics(session: SessionData): string | null {
   const originalLineCount = originalLyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
   const parsedLines = parseTranslationJson(entry.text, originalLineCount);
   if (parsedLines) {
-    return combineLyricsFromJson(originalLyrics, parsedLines.split("\n"))?.combined ?? null;
+    const combined = combineLyricsFromJson(originalLyrics, parsedLines.split("\n"));
+    if (combined) {
+      return combined.combined;
+    }
+    // Drift-detected cache entry — degrade to the separate-block form rather
+    // than null (callers render null as "no lyrics" and would blank the page).
+    return combineLyricsWithTranslation(originalLyrics, parsedLines)?.combined ?? originalLyrics;
   }
 
   // Fallback: try text-based combine (handles legacy plain-text cache entries)

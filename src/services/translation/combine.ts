@@ -18,6 +18,13 @@ function normalizeForComparison(s: string): string {
     .trim();
 }
 
+// A line with no letters or digits (e.g. "♪", "———") carries no translatable
+// content; models legitimately return "" for these. Exempt them from the
+// drift check so symbol-only lines don't reject an otherwise aligned output.
+function hasContent(line: string): boolean {
+  return /[\p{L}\p{N}]/u.test(line);
+}
+
 // ── JSON translation parsing ────────────────────────────────────────────────
 
 interface JsonLine {
@@ -153,6 +160,17 @@ export function combineLyricsWithTranslation(originalLyrics: string, translatedL
       warn("combineLyrics: blank line position mismatch, attaching translation as separate block", { line: i });
       return { combined: fallbackBlock(originalLyrics, translatedLyrics), mismatch: true };
     }
+
+    // Non-blank line with an empty translation renders as a bare "[]" bracket
+    // (the reported Mephisto artifact) — treat it as drift and degrade.
+    // Symbol-only lines ("♪") are exempt — models legitimately return "".
+    if (orig.trim() !== "" && trans.trim() === "" && hasContent(orig)) {
+      warn("combineLyrics: empty translation for non-blank line, attaching translation as separate block", {
+        line: i,
+        original: orig.trim(),
+      });
+      return { combined: fallbackBlock(originalLyrics, translatedLyrics), mismatch: true };
+    }
   }
 
   const parts: string[] = [];
@@ -199,6 +217,29 @@ export function combineLyricsFromJson(
   // Trim trailing blanks from both sides before interleaving
   while (originalLines.length > 0 && originalLines[originalLines.length - 1].trim() === "") {
     originalLines.pop();
+  }
+
+  // Per-line sanity check: a model that dropped or added a line mid-song
+  // still satisfies the total count but shifts every following pair (empty
+  // "[…]" under non-blank lines). Reject that instead of shipping it.
+  for (let i = 0; i < originalLines.length; i++) {
+    const orig = originalLines[i];
+    const trans = (translatedLines[i] ?? "").trim();
+    if (orig.trim() === "" && trans !== "") {
+      warn("combineLyricsFromJson: blank original line got a translation — model drift", {
+        line: i + 1,
+        original: orig,
+        translated: trans,
+      });
+      return null;
+    }
+    if (orig.trim() !== "" && trans === "" && hasContent(orig)) {
+      warn("combineLyricsFromJson: non-blank original line got an empty translation — model drift", {
+        line: i + 1,
+        original: orig,
+      });
+      return null;
+    }
   }
 
   const parts: string[] = [];

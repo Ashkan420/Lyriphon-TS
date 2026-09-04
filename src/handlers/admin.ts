@@ -3,7 +3,7 @@ import { Env } from "../env";
 import { SessionDO } from "../do";
 import { SessionData } from "../session/types";
 import { formatLogsForTelegram, warn } from "../utils/logger";
-import { safeAnswer } from "../utils/telegram";
+import { safeAnswer, sendRemainingChunks } from "../utils/telegram";
 import { isAutoFetchEnabled, setAutoFetchEnabled } from "../db/settings";
 
 // Telegram button `style` is newer than some @grammyjs/types pins; match
@@ -99,9 +99,9 @@ async function renderAdminSettings(
 }
 
 async function renderAdminLogs(ctx: Context): Promise<void> {
-  const text = formatLogsForTelegram();
+  const chunks = formatLogsForTelegram();
   try {
-    await ctx.editMessageText(text, {
+    await ctx.editMessageText(chunks[0], {
       reply_markup: {
         inline_keyboard: [
           [{ text: "Refresh", callback_data: "admin_logs_refresh" }],
@@ -112,6 +112,7 @@ async function renderAdminLogs(ctx: Context): Promise<void> {
   } catch {
     // ignore
   }
+  await sendRemainingChunks(ctx, chunks);
 }
 
 // D1 read failure degrades to OFF (fail closed) rather than crashing /admin.

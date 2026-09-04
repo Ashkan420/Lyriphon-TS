@@ -70,13 +70,14 @@ describe("translate retry button", () => {
     const session = sessionWithLyrics();
     const { ctx, api } = makeCtx("translate:lang:fa");
 
-    // Permanent 400s bail out of the model chain with no backoff delays.
+    // Permanent 400s bail out of the model chain with no backoff delays. The
+    // failure now triggers one retry-hint attempt, then the format-error UI.
     vi.stubGlobal("fetch", vi.fn(async () => new Response("bad key", { status: 400 })));
 
     await handleTranslateCallback(ctx, session, envWith());
 
     const { text, markup } = lastEditCall(api);
-    expect(text).toContain("Translation failed");
+    expect(text).toContain("Translation format error");
     expect(retryData(markup)).toBe("translate:retry");
     expect(session.telegraph.isTranslating).toBe(false);
     expect(session.telegraph.translateMessageId).toBe(42);

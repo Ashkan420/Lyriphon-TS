@@ -14,6 +14,7 @@ import {
   LanguageCode,
 } from "../../services/translation/types";
 import { combineLyricsWithTranslation, combineLyricsFromJson, parseTranslationJson } from "../../services/translation/combine";
+import { log } from "../../utils/logger";
 import { Env } from "../../env";
 import { SessionData } from "../../session/types";
 import {
@@ -211,6 +212,7 @@ async function applyCachedOrTranslate(
     const originalLineCount = originalLyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
     const parsedLines = parseTranslationJson(cached.text, originalLineCount);
     if (parsedLines) {
+      log("translate:cache-hit", "original:", originalLyrics, "translation:", parsedLines);
       const result = combineLyricsFromJson(originalLyrics, parsedLines.split("\n"));
       if (result) {
         const lastData = session.telegraph.data as any;
@@ -335,16 +337,31 @@ async function executeTranslation(
     return;
   }
 
+  const originalHash = hashString(originalLyrics);
+  const cacheKey = `${langCode}:${originalHash}`;
+
   if (attempt.kind !== "json") {
+    // The dominant failure is a line-count mismatch from parseTranslationJson
+    // (model dropped/merged a line). Retry once with the count hint before
+    // surfacing the error — the bare retryHint path was previously unreachable
+    // because parse failures short-circuited here.
+    const combined = await retryWithHint(
+      ctx, session, env, cid, pickerMsgId, snapshotOriginal, langCode, langAnalysis, multilingualEnabled,
+    );
+    if (combined) {
+      session.telegraph.translatedLyrics ??= {};
+      session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: combined.rawJson };
+      await finishTranslation(ctx, session, env, langCode, cid, pickerMsgId, combined.text);
+      return;
+    }
+
     failTranslationState(session);
-    await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Translation failed. Please try again.", { inline_keyboard: buildRetryKeyboard() });
+    warn("translation attempt and retry both failed to produce valid output");
+    await safeEdit(ctx.api, cid!, pickerMsgId!, "❌ Translation format error — try again", { inline_keyboard: buildRetryKeyboard() });
     return;
   }
 
   const { rawJson, lines } = attempt;
-
-  const originalHash = hashString(originalLyrics);
-  const cacheKey = `${langCode}:${originalHash}`;
 
   if (!session.telegraph.translatedLyrics) {
     session.telegraph.translatedLyrics = {};
@@ -374,21 +391,12 @@ async function executeTranslation(
       lang: langCode,
     });
 
-    await safeEdit(ctx.api, cid!, pickerMsgId!, "🔄 Retrying translation...");
-
-    const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis, multilingualEnabled, true);
-    if (retry.kind === "rate_limited") {
-      session.telegraph.isTranslating = false;
-      session.telegraph.translationCooldownUntil = retry.cooldownUntil;
-      await showRateLimitCooldown(ctx, cid, pickerMsgId, retry.cooldownUntil);
-      return;
-    }
-    if (retry.kind === "json") {
-      const retryCombined = combineLyricsFromJson(snapshotOriginal, retry.lines);
-      if (retryCombined) {
-        session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: retry.rawJson };
-        combined = retryCombined.combined;
-      }
+    const retry = await retryWithHint(
+      ctx, session, env, cid, pickerMsgId, snapshotOriginal, langCode, langAnalysis, multilingualEnabled,
+    );
+    if (retry) {
+      session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: retry.rawJson };
+      combined = retry.text;
     }
 
     if (!combined) {
@@ -399,6 +407,57 @@ async function executeTranslation(
       return;
     }
   }
+
+  await finishTranslation(ctx, session, env, langCode, cid, pickerMsgId, combined);
+}
+
+// One retry with the line-count hint attached. Returns the retry's raw JSON
+// and combined text on success, null when still unusable (rate-limited, error,
+// or drift-detected combine). The caller owns caching and the error UI.
+async function retryWithHint(
+  ctx: Context,
+  session: SessionData,
+  env: Env,
+  cid: number | undefined,
+  pickerMsgId: number | undefined,
+  snapshotOriginal: string,
+  langCode: string,
+  langAnalysis?: LanguageAnalysis,
+  multilingualEnabled = true,
+): Promise<{ rawJson: string; text: string } | null> {
+  await safeEdit(ctx.api, cid!, pickerMsgId!, "🔄 Retrying translation...");
+
+  const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis, multilingualEnabled, true);
+  if (retry.kind === "rate_limited") {
+    session.telegraph.isTranslating = false;
+    session.telegraph.translationCooldownUntil = retry.cooldownUntil;
+    await showRateLimitCooldown(ctx, cid, pickerMsgId, retry.cooldownUntil);
+    return null;
+  }
+  if (retry.kind !== "json") {
+    return null;
+  }
+
+  const combined = combineLyricsFromJson(snapshotOriginal, retry.lines);
+  if (!combined) {
+    warn("translation retry output rejected by combine (drift or misalignment)");
+    return null;
+  }
+  return { rawJson: retry.rawJson, text: combined.combined };
+}
+
+// Apply a successfully combined translation to the Telegraph page and finish
+// the session state. Failure paths set the retry keyboard themselves.
+async function finishTranslation(
+  ctx: Context,
+  session: SessionData,
+  env: Env,
+  langCode: string,
+  cid: number | undefined,
+  pickerMsgId: number | undefined,
+  combined: string,
+): Promise<void> {
+  const language = findLanguage(langCode);
 
   const lastData = session.telegraph.data as any;
   if (lastData) {
@@ -412,7 +471,7 @@ async function executeTranslation(
   session.telegraph.activeLang = langCode;
   session.telegraph.pendingTranslationLang = undefined;
   resetTranslationState(session);
-  await safeEdit(ctx.api, cid!, pickerMsgId!, `✅ Lyrics translated to ${language.name}`);
+  await safeEdit(ctx.api, cid!, pickerMsgId!, `✅ Lyrics translated to ${language?.name ?? langCode}`);
 }
 
 function buildRetryKeyboard(): InlineKeyboardButton[][] {

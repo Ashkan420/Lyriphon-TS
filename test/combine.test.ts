@@ -128,6 +128,29 @@ describe("combineLyricsFromJson", () => {
     const result = combineLyricsFromJson(original, lines);
     expect(result?.mismatch).toBe(false);
   });
+
+  it("returns null when a non-blank line gets an empty translation (model drift)", () => {
+    // The reported Mephisto artifact: one dropped line shifts every following
+    // pair, producing bare "[]" brackets under lyric lines.
+    const original = "line one\nline two\nline three";
+    const lines = ["uno", "", "tres"];
+    const result = combineLyricsFromJson(original, lines);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when a blank line gets a non-empty translation (model drift)", () => {
+    const original = "line one\n\nline three";
+    const lines = ["uno", "extra", "tres"];
+    const result = combineLyricsFromJson(original, lines);
+    expect(result).toBeNull();
+  });
+
+  it("allows an empty translation for a symbol-only line like ♪", () => {
+    const original = "line one\n♪\nline three";
+    const lines = ["uno", "", "tres"];
+    const result = combineLyricsFromJson(original, lines);
+    expect(result?.mismatch).toBe(false);
+  });
 });
 
 describe("combineLyricsWithTranslation", () => {
@@ -223,11 +246,12 @@ describe("combineLyricsWithTranslation", () => {
 describe("combine CRLF and JSON validation edge cases", () => {
   it("normalizes CRLF line endings on every line, not just the first", () => {
     const original = "line one\r\n\r\nline two\r\nline three";
-    const result = combineLyricsFromJson(original, ["uno", "", "dos"]);
+    const result = combineLyricsFromJson(original, ["uno", "", "dos", "tres"]);
     expect(result).not.toBeNull();
     expect(result!.combined).not.toContain("\r");
     expect(result!.combined).toContain("[uno]");
     expect(result!.combined).toContain("[dos]");
+    expect(result!.combined).toContain("[tres]");
   });
 
   it("returns null when an entry is missing t entirely", () => {

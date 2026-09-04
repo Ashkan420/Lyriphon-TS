@@ -2,6 +2,7 @@ import { LRCLIB_TIMEOUT_MS, LRCLIB_MAX_RETRIES } from "../config";
 import { retryAsync } from "../utils/retry";
 import { fetchWithTimeout } from "../utils/fetch";
 import { log, previewText, warn } from "../utils/logger";
+import { normalizeLyrics } from "../utils/lyrics";
 
 const LRCLIB_SEARCH = "https://lrclib.net/api/search";
 
@@ -168,7 +169,7 @@ export async function getLyrics(
         previewText(result.plainLyrics),
       );
 
-      return result.plainLyrics;
+      return normalizeLyrics(result.plainLyrics);
     }
 
     log(

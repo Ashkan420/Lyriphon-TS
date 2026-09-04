@@ -10,7 +10,7 @@ import { handleCallbackQuery, processTextMessage } from "./handlers/callbacks";
 import { getSession } from "./session/index";
 import { SessionMode } from "./session/types";
 import { inMode } from "./session/transitions";
-import { safeDelete, cancelEdit } from "./utils/telegram";
+import { safeDelete, cancelEdit, sendRemainingChunks } from "./utils/telegram";
 import { clearAudioState } from "./session/flows";
 import { warn, formatLogsForTelegram } from "./utils/logger";
 import { adminCommand, handleAdminCallback, isBotOwner } from "./handlers/admin";
@@ -102,8 +102,8 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     if (!isBotOwner(ctx, env)) {
       return;
     }
-    const text = formatLogsForTelegram();
-    await ctx.reply(text, {
+    const chunks = formatLogsForTelegram();
+    await ctx.reply(chunks[0], {
       reply_markup: {
         inline_keyboard: [
           [{ text: "Refresh", callback_data: "logs_refresh", style: "primary" as const }],
@@ -111,6 +111,7 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
         ],
       },
     });
+    await sendRemainingChunks(ctx, chunks);
   });
 
   bot.command("multilingual", async (ctx) => {

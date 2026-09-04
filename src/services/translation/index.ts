@@ -3,6 +3,7 @@ import { geminiTranslate, GeminiResult } from "./gemini";
 import { composeTranslationPrompt } from "./prompts";
 import { findLanguage, LanguageCode } from "./types";
 import { log, previewText, warn } from "../../utils/logger";
+import { normalizeLyrics } from "../../utils/lyrics";
 import { LanguageAnalysis } from "./language-analyzer";
 import { parseTranslationJson } from "./combine";
 
@@ -48,7 +49,11 @@ export async function translateLyrics(
     return { type: "error" };
   }
 
-  const lineCount = lyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
+  // Normalize defensively so the prompt text and the counted line count are
+  // always the same string (cache rows predate edge-newline healing).
+  const normalizedLyrics = normalizeLyrics(lyrics);
+
+  const lineCount = normalizedLyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
   log(
     "translateLyrics:start",
     JSON.stringify({
@@ -60,10 +65,12 @@ export async function translateLyrics(
       mode: langAnalysis?.mode ?? null,
     }),
     "preview:",
-    previewText(lyrics),
+    previewText(normalizedLyrics),
   );
+  // Full text for owner diffing (chunked /logs delivery).
+  log("translateLyrics:lyrics", normalizedLyrics);
 
-  const prompt = composeTranslationPrompt(lyrics, language, langAnalysis, multilingualEnabled);
+  const prompt = composeTranslationPrompt(normalizedLyrics, language, langAnalysis, multilingualEnabled);
 
   if (retryHint) {
     prompt.system += RETRY_HINT.replace(/N/g, String(lineCount));
@@ -83,10 +90,12 @@ export async function translateLyrics(
     const parsedLines = parseTranslationJson(geminiResult.text, originalLineCount);
 
     if (!parsedLines) {
+      // Full model output for owner diffing — the snippet isn't enough to see
+      // which lines the model dropped or merged.
       warn("translateLyrics: failed to parse JSON translation", {
         lineCount: originalLineCount,
-        snippet: geminiResult.text.slice(0, 200),
       });
+      warn("translateLyrics: full model output (parse failure)", geminiResult.text);
       return { type: "error" };
     }
 
@@ -96,6 +105,8 @@ export async function translateLyrics(
       "preview:",
       previewText(parsedLines),
     );
+    // Full translation for owner diffing.
+    log("translateLyrics:translation", parsedLines);
 
     return {
       type: "success",
