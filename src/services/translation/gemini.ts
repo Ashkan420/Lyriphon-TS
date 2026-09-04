@@ -8,8 +8,8 @@ const MODELS = [
 ];
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-const TIMEOUT_MS = 30000;
-const MAX_ATTEMPTS = 3;
+const TIMEOUT_MS = 10000;
+const MAX_ATTEMPTS = 2;
 
 export type GeminiResult =
   | { type: "success"; text: string }
