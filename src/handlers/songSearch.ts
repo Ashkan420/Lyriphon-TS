@@ -58,7 +58,10 @@ export function buildTrackButtons(results: any[], page = 0) {
   return buttons;
 }
 
-export async function songSearchCommand(ctx: Context, session: SessionData, env: Env) {
+// Shared core for both entry points: clears stale audio state, resolves
+// Farsi → Finglish, runs the Deezer search and presents paginated track
+// buttons. Used by /song and by plain-text queries typed in DMs.
+export async function runSongSearch(ctx: Context, session: SessionData, env: Env, rawQuery: string | undefined) {
   const chatId = ctx.chat?.id;
   if (!chatId) {
     return;
@@ -68,7 +71,7 @@ export async function songSearchCommand(ctx: Context, session: SessionData, env:
 
   await clearSendChannelPrompt(ctx.api, chatId, session);
 
-  const query = (typeof ctx.match === 'string' ? ctx.match : ctx.match?.[0]) ?? ctx.message?.text?.split(" ").slice(1).join(" ");
+  const query = rawQuery?.trim();
   if (!query) {
     await ctx.reply("❌ Usage: /song <track name>");
     return;
@@ -106,6 +109,25 @@ export async function songSearchCommand(ctx: Context, session: SessionData, env:
     undefined,
     fallbackQuery,
   );
+}
+
+export async function songSearchCommand(ctx: Context, session: SessionData, env: Env) {
+  const query = (typeof ctx.match === 'string' ? ctx.match : ctx.match?.[0]) ?? ctx.message?.text?.split(" ").slice(1).join(" ");
+  await runSongSearch(ctx, session, env, query);
+}
+
+// Plain text in a DM (while not in edit mode) acts like /song <text>.
+// Commands are handled by bot.command above or ignored here if unknown;
+// group text stays ignored.
+export async function handlePlainTextInput(ctx: Context, session: SessionData, env: Env) {
+  const text = ctx.message?.text;
+  if (!text || text.startsWith("/")) {
+    return;
+  }
+  if (ctx.chat?.type !== "private") {
+    return;
+  }
+  await runSongSearch(ctx, session, env, text);
 }
 
 export async function handleSearchPageCallback(ctx: Context, session: SessionData) {

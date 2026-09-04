@@ -2,7 +2,7 @@ import { Bot, Context } from "grammy";
 import { Env } from "./env";
 import { SessionDO } from "./do";
 import { startCommand, helpCommand } from "./handlers/start";
-import { songSearchCommand, handleSearchPageCallback } from "./handlers/songSearch";
+import { songSearchCommand, handleSearchPageCallback, handlePlainTextInput } from "./handlers/songSearch";
 import { handleMusicFile } from "./handlers/musicFile";
 import { inlineSearch } from "./handlers/inlineSearch";
 import { trackChannels } from "./handlers/channelTracker";
@@ -262,7 +262,8 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
       return;
     }
 
-    return;
+    // Outside edit mode, plain text in a DM behaves like /song <text>.
+    await handlePlainTextInput(ctx, session, env);
   });
 
   bot.on("message:audio", async (ctx) => {

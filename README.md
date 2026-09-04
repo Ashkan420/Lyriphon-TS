@@ -9,7 +9,7 @@ Search by name, or just send an audio file and let the bot figure out the track.
 ## Features
 
 ### Core flow
-- **Two ways to start** — search with `/song <track name>`, or **just send an audio file** and the bot reads the title/artist from the file's tags (or filename) and searches automatically.
+- **Two ways to start** — search with `/song <track name>`, **just type the track name** in a DM (plain text behaves like `/song`), or **just send an audio file** and the bot reads the title/artist from the file's tags (or filename) and searches automatically.
 - **Song search** — `/song <track name>` searches Deezer and returns a paginated list of matches (5 per page, Previous/Next navigation).
 - **Automatic lyrics pages** — generates a [Telegraph](https://telegra.ph) page with cover art, metadata, and lyrics fetched from LRCLIB.
 - **Attach to audio** — send a music file and the bot attaches an inline **Lyrics** button linking to the Telegraph page.
