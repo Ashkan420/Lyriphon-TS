@@ -37,7 +37,7 @@ describe("renderTrackProgressHtml", () => {
   it("renders an all-unchecked checklist with the info status line", () => {
     const html = renderTrackProgressHtml({ stage: "info" });
     expect(html).toContain("⏳ Fetching track info…");
-    expect((html.match(/<input type="checkbox">/g) ?? []).length).toBe(4);
+    expect((html.match(/<input type="checkbox">/g) ?? []).length).toBe(5);
     expect(html).not.toContain("checked");
     expect(html).not.toContain("<h3>");
     // tg-thinking is drafts-only and rejected in persisted messages.

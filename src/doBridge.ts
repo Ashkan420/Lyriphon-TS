@@ -228,7 +228,11 @@ export class BridgeDO {
 
   private async handleEnqueue(request: Request): Promise<Response> {
     const body = (await request.json()) as { token: string; trackId: number; chatId: number };
-    if (!body?.token || !body?.trackId || !body?.chatId) {
+    // Type checks, not falsy checks: inline rows pass chatId 0 (chatless —
+    // delivery edits the inline message instead of DM-sending).
+    if (typeof body?.token !== "string" || !body.token
+      || typeof body?.trackId !== "number" || !Number.isFinite(body.trackId)
+      || typeof body?.chatId !== "number" || !Number.isFinite(body.chatId)) {
       return Response.json({ ok: false, error: "missing fields" });
     }
 
@@ -307,6 +311,22 @@ export class BridgeDO {
         }
       }
       const api = await this.botApi();
+      // Inline rows (chat_id 0) have no requester chat — surface the failure
+      // on the inline message itself.
+      if (row.inline_message_id) {
+        try {
+          await api.editMessageTextInline(
+            row.inline_message_id,
+            `❌ Couldn't fetch the music file (${reason}). Grab it from deezload: https://t.me/deezload2bot?start=deezerttrack${row.track_id}`,
+            row.telegraph_url
+              ? { reply_markup: { inline_keyboard: [[{ text: "Lyrics", url: row.telegraph_url }]] } }
+              : undefined,
+          );
+        } catch (editError) {
+          warn("BridgeDO: inline failure edit failed", editError);
+        }
+        return;
+      }
       await api.sendMessage(
         row.chat_id,
         `❌ Couldn't fetch this track automatically (${reason}). Grab it from deezload: https://t.me/deezload2bot?start=deezerttrack${row.track_id}`,

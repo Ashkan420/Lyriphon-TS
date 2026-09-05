@@ -14,6 +14,13 @@ function makeApi(failMethods: string[] = []) {
       }
       return Promise.resolve(true);
     },
+    editMessageMediaInline: (...args: unknown[]) => {
+      calls.push({ method: "editMessageMediaInline", args });
+      if (failMethods.includes("editMessageMediaInline")) {
+        return Promise.reject(new Error("message to edit not found"));
+      }
+      return Promise.resolve(true);
+    },
   };
   return { api, calls };
 }
@@ -81,6 +88,37 @@ describe("InlineTrackProgress", () => {
     await progress.fail("boom");
     expect(calls).toHaveLength(0);
   });
+
+  it("markMusicFailed shows the failed Music note", async () => {
+    const { api, calls } = makeApi();
+    const progress = new InlineTrackProgress(api, INLINE_ID);
+    await progress.start();
+    calls.length = 0;
+
+    await progress.markMusicFailed();
+
+    expect(calls).toHaveLength(1);
+    const html: string = (calls[0].args[1] as any).html;
+    expect(html).toContain("Music file");
+    expect(html).toContain("failed");
+  });
+
+  it("finalizeAsAudio morphs the message into the audio with caption and keyboard", async () => {
+    const { api, calls } = makeApi();
+    const progress = new InlineTrackProgress(api, INLINE_ID);
+    const ok = await progress.finalizeAsAudio(
+      "file-id-1",
+      "caption text",
+      { inline_keyboard: [[{ text: "Lyrics", url: "https://telegra.ph/x" }]] },
+    );
+
+    expect(ok).toBe(true);
+    expect(calls[0].method).toBe("editMessageMediaInline");
+    const [inlineId, media, opts] = calls[0].args as [string, any, any];
+    expect(inlineId).toBe(INLINE_ID);
+    expect(media).toMatchObject({ type: "audio", media: "file-id-1", caption: "caption text", parse_mode: "MarkdownV2" });
+    expect(opts.reply_markup.inline_keyboard[0][0].text).toBe("Lyrics");
+  });
 });
 
 describe("buildInlineResultHtml", () => {
@@ -110,6 +148,20 @@ describe("buildInlineResultHtml", () => {
     });
     expect(html).toContain("&lt;b&gt;Track&lt;/b&gt;");
     expect(html).toContain("A &amp; B");
+  });
+});
+
+describe("renderTrackProgressHtml (music stage)", () => {
+  it("renders five checklist items including Music file", () => {
+    // Re-imported here to assert the shared renderer's stage list.
+    return import("../src/utils/richMessages").then(({ renderTrackProgressHtml }) => {
+      const html = renderTrackProgressHtml({ stage: "info" });
+      expect(html).toContain("Track info");
+      expect(html).toContain("Album metadata");
+      expect(html).toContain("Lyrics");
+      expect(html).toContain("Telegraph page");
+      expect(html).toContain("Music file");
+    });
   });
 });
 

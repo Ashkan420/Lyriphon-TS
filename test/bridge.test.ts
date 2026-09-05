@@ -12,6 +12,8 @@ vi.mock("grammy", async (importOriginal) => {
     constructor(_token: string) {}
     sendMessage = (...args: any[]) => apiMethods.sendMessage(...args);
     sendAudio = (...args: any[]) => apiMethods.sendAudio(...args);
+    editMessageMediaInline = (...args: any[]) => apiMethods.editMessageMediaInline?.(...args);
+    editMessageTextInline = (...args: any[]) => apiMethods.editMessageTextInline?.(...args);
     deleteMessage = (...args: any[]) => apiMethods.deleteMessage?.(...args);
   }
   return { ...actual, Api: MockApi };
@@ -31,6 +33,7 @@ function row(overrides: Partial<AudioRequestRow> = {}): AudioRequestRow {
     artist_name: "Artist",
     telegraph_url: "https://telegra.ph/abc",
     queued_msg_id: null,
+    inline_message_id: null,
     status: "pending",
     created_at: now - 60,
     updated_at: now - 60,
@@ -211,6 +214,46 @@ describe("handleBridgeUpdate", () => {
     expect(statusStmt?.bound).toContain("delivered");
   });
 
+  it("delivers an inline row by morphing the sent inline message into the audio", async () => {
+    const editMessageMediaInline = vi.fn(async (..._args: any[]) => true);
+    const sendAudio = vi.fn(async (..._args: any[]) => {});
+    apiMethods.editMessageMediaInline = editMessageMediaInline;
+    apiMethods.sendAudio = sendAudio;
+    const db = fakeD1(row({ inline_message_id: "inline-msg-9", chat_id: 0 }));
+
+    await handleBridgeUpdate(makeEnv(db), bridgeUpdate());
+
+    expect(editMessageMediaInline).toHaveBeenCalledTimes(1);
+    const [inlineId, media, opts] = editMessageMediaInline.mock.calls[0];
+    expect(inlineId).toBe("inline-msg-9");
+    expect(media).toMatchObject({
+      type: "audio",
+      media: "audio-file-id",
+      parse_mode: "MarkdownV2",
+    });
+    expect(String(media.caption)).toContain("Song");
+    expect(opts.reply_markup.inline_keyboard[0][0]).toEqual({ text: "Lyrics", url: "https://telegra.ph/abc" });
+    // No DM copy for chatless rows.
+    expect(sendAudio).not.toHaveBeenCalled();
+    const statusStmt = lastStatusStatement(db);
+    expect(statusStmt?.bound).toContain("delivered");
+  });
+
+  it("marks an inline row failed without DM-sending when the morph fails", async () => {
+    const editMessageMediaInline = vi.fn(async (..._args: any[]) => {
+      throw new Error("message to edit not found");
+    });
+    const sendMessage = vi.fn(async (..._args: any[]) => ({}));
+    apiMethods.editMessageMediaInline = editMessageMediaInline;
+    apiMethods.sendMessage = sendMessage;
+    const db = fakeD1(row({ inline_message_id: "inline-msg-9", chat_id: 0 }));
+
+    await handleBridgeUpdate(makeEnv(db), bridgeUpdate());
+
+    expect(lastStatusStatement(db)?.bound).toContain("failed");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("ignores a file whose token has no pending row", async () => {
     const sendAudio = vi.fn(async (..._args: any[]) => {});
     apiMethods.sendAudio = sendAudio;
@@ -319,6 +362,28 @@ describe("handleBridgeUpdate", () => {
     const [chatId, text] = sendMessage.mock.calls[0];
     expect(chatId).toBe(555);
     expect(text).toContain("deezload2bot?start=deezerttrack64321156");
+  });
+
+  it("reports a failed inline job on the message instead of DM-sending", async () => {
+    const editMessageTextInline = vi.fn(async (..._args: any[]) => true);
+    const sendMessage = vi.fn(async (..._args: any[]) => ({}));
+    apiMethods.editMessageTextInline = editMessageTextInline;
+    apiMethods.sendMessage = sendMessage;
+    const db = fakeD1(row({ inline_message_id: "inline-msg-9", chat_id: 0 }));
+
+    await handleBridgeUpdate(makeEnv(db), bridgeUpdate({
+      caption: undefined,
+      audio: undefined,
+      text: `lyq:fail req=${TOKEN} timeout`,
+    }));
+
+    expect(lastStatusStatement(db)?.bound).toContain("failed");
+    expect(editMessageTextInline).toHaveBeenCalledTimes(1);
+    const [inlineId, text, opts] = editMessageTextInline.mock.calls[0];
+    expect(inlineId).toBe("inline-msg-9");
+    expect(String(text)).toContain("deezload2bot?start=deezerttrack64321156");
+    expect(opts.reply_markup.inline_keyboard[0][0]).toEqual({ text: "Lyrics", url: "https://telegra.ph/abc" });
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("stashes pending-send context and prompts channels after delivery", async () => {

@@ -1,5 +1,5 @@
 import { Api, RawApi } from "grammy";
-import type { InlineKeyboardMarkup, InputRichMessage } from "@grammyjs/types";
+import type { InlineKeyboardMarkup, InputMediaAudio, InputRichMessage } from "@grammyjs/types";
 import { formatDuration } from "./telegram";
 import { isValidImageUrl } from "./urlValidation";
 import { warn } from "./logger";
@@ -32,7 +32,7 @@ export function countLyricLines(lyrics: string): number {
     .filter((line) => line.trim()).length;
 }
 
-export type TrackStage = "info" | "metadata" | "lyrics" | "telegraph";
+export type TrackStage = "info" | "metadata" | "lyrics" | "telegraph" | "music";
 
 export interface TrackProgressState {
   stage: TrackStage;
@@ -42,15 +42,19 @@ export interface TrackProgressState {
   releaseDate?: string;
   // Rendered as the Lyrics checklist note, e.g. "42 lines (cached)".
   lyricsNote?: string;
+  // Rendered as the Music file checklist note (inline auto-fetch), e.g.
+  // "queued" / "failed".
+  musicNote?: string;
 }
 
-const STAGE_ORDER: TrackStage[] = ["info", "metadata", "lyrics", "telegraph"];
+const STAGE_ORDER: TrackStage[] = ["info", "metadata", "lyrics", "telegraph", "music"];
 
 const STAGE_LABELS: Record<TrackStage, string> = {
   info: "Track info",
   metadata: "Album metadata",
   lyrics: "Lyrics",
   telegraph: "Telegraph page",
+  music: "Music file",
 };
 
 const STAGE_ACTION: Record<TrackStage, string> = {
@@ -58,6 +62,7 @@ const STAGE_ACTION: Record<TrackStage, string> = {
   metadata: "Fetching album metadata…",
   lyrics: "Fetching lyrics…",
   telegraph: "Creating Telegraph page…",
+  music: "Fetching music file…",
 };
 
 // Plain-text states for the non-rich fallback, matching the pre-rich flow.
@@ -66,6 +71,7 @@ const PLAIN_STAGE_TEXT: Record<TrackStage, string> = {
   metadata: "⏳ Fetching metadata...",
   lyrics: "⏳ Fetching lyrics...",
   telegraph: "⏳ Creating Telegraph page...",
+  music: "⏳ Fetching music file...",
 };
 
 // The persisted progress view: stages before the current one are checked off,
@@ -93,6 +99,9 @@ export function renderTrackProgressHtml(state: TrackProgressState): string {
     let label = STAGE_LABELS[stage];
     if (stage === "lyrics" && state.lyricsNote) {
       label += ` — ${state.lyricsNote}`;
+    }
+    if (stage === "music" && state.musicNote) {
+      label += ` — ${state.musicNote}`;
     }
     const checked = i < currentIdx ? " checked" : "";
     return `<li><input type="checkbox"${checked}>${escapeRichHtml(label)}</li>`;
@@ -365,6 +374,14 @@ export class InlineTrackProgress {
     }
   }
 
+  // Flip the Music file item to its failed state (inline auto-fetch).
+  async markMusicFailed(): Promise<void> {
+    if (this.dead) {
+      return;
+    }
+    await this.update({ stage: "music", musicNote: "failed" });
+  }
+
   // Persist the result by editing the checklist into the final compact card.
   // Returns false when the edit fails, so the caller can just log.
   async finalizeText(text: string, markup: InlineKeyboardMarkup): Promise<boolean> {
@@ -379,6 +396,27 @@ export class InlineTrackProgress {
       return true;
     } catch (error) {
       warn("inline finalize edit failed", error);
+      return false;
+    }
+  }
+
+  // Morph the message into the delivered audio (song + caption + Lyrics
+  // button — the DM flow's end state). Inline edits can't upload files, so
+  // this only accepts previously-uploaded file_ids (cache or bridge forward).
+  async finalizeAsAudio(fileId: string, caption: string, markup: InlineKeyboardMarkup): Promise<boolean> {
+    if (this.dead) {
+      return false;
+    }
+    try {
+      await this.api.editMessageMediaInline(this.inlineMessageId, {
+        type: "audio",
+        media: fileId,
+        caption,
+        parse_mode: "MarkdownV2",
+      } satisfies InputMediaAudio<any>, { reply_markup: markup });
+      return true;
+    } catch (error) {
+      warn("inline audio morph failed", error);
       return false;
     }
   }

@@ -152,6 +152,44 @@ async function deliverFile(env: Env, audio: any, token: string): Promise<void> {
     : `>\`${escapeMd(trackName)} — ${escapeMd(artistName)}\``;
 
   const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
+
+  // Inline delivery: the sent inline message IS the destination — morph it
+  // into the audio (chat_id is 0 for these rows; no DM copy, no channel
+  // prompt, no pending-send stash).
+  if (row.inline_message_id) {
+    const lyricsKeyboard = row.telegraph_url
+      ? { inline_keyboard: [[{ text: "Lyrics", url: row.telegraph_url }]] }
+      : undefined;
+    try {
+      await api.editMessageMediaInline(row.inline_message_id, {
+        type: "audio",
+        media: audio.file_id,
+        caption,
+        parse_mode: "MarkdownV2",
+      }, lyricsKeyboard ? { reply_markup: lyricsKeyboard } : undefined);
+    } catch (error) {
+      warn("bridge: inline audio morph failed", { token, inlineMessageId: row.inline_message_id }, error);
+      await setRequestStatus(env.DB, token, "failed");
+      // The message may be gone (deleted / older than editable) but the file
+      // itself was fetched fine — store it so the next pick reuses it.
+      try {
+        await setTrackFileId(env.DB, row.track_id, audio.file_id);
+      } catch (storeError) {
+        warn("bridge: failed to store track file_id", storeError);
+      }
+      return;
+    }
+    await setRequestStatus(env.DB, token, "delivered");
+    // Canonical file_id for the tracks store — enables reuse.
+    try {
+      await setTrackFileId(env.DB, row.track_id, audio.file_id);
+    } catch (error) {
+      warn("bridge: failed to store track file_id", error);
+    }
+    log("bridge: delivered inline", JSON.stringify({ token, trackId: row.track_id }));
+    return;
+  }
+
   try {
     await api.sendAudio(row.chat_id, audio.file_id, {
       caption,
@@ -187,6 +225,23 @@ async function reportFailure(env: Env, token: string): Promise<void> {
 
   await setRequestStatus(env.DB, token, "failed");
   await deleteQueuedMsg(env, row);
+
+  // Inline rows have no requester chat — surface the failure on the message.
+  if (row.inline_message_id) {
+    try {
+      const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
+      const text = `❌ Couldn't fetch the music file. Grab it from deezload: ${deezloadLink(row)}`;
+      await api.editMessageTextInline(row.inline_message_id, text, {
+        reply_markup: row.telegraph_url
+          ? { inline_keyboard: [[{ text: "Lyrics", url: row.telegraph_url }]] }
+          : undefined,
+      });
+    } catch (error) {
+      warn("bridge: inline failure edit failed", { token }, error);
+    }
+    return;
+  }
+
   await notifyRequester(
     env,
     row,

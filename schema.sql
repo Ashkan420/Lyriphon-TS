@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS audio_requests (
   track_title TEXT,
   artist_name TEXT,
   telegraph_url TEXT,
+  inline_message_id TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())

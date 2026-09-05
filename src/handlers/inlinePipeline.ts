@@ -1,5 +1,5 @@
-// Inline-mode track pipeline: runs the lyrics checklist on a message sent via
-// inline mode. Triggered two ways, deduped by the in-flight map:
+// Inline-mode track pipeline: runs the lyrics + music checklist on a message
+// sent via inline mode. Triggered two ways, deduped by the in-flight map:
 //   1. chosen_inline_result — the user just sent the result (auto-start).
 //   2. the 📄 Get Lyrics button — a chatless callback, for when Telegram
 //     drops/omits the chosen-result feedback or the user re-taps.
@@ -10,9 +10,12 @@
 // flow state is a bug, and in groups the "session" isn't even the sender's).
 //
 // Everything renders ON the inline message via the *Inline edit methods:
-// the same rich checklist as the DM flow, finalized into a compact Telegraph
-// card with a Lyrics URL button. Music file support is deliberately absent
-// (next step) — no bridge, no audio_requests, no DB schema changes.
+// the same rich checklist as the DM flow. End states:
+//   - stored/cached audio → message morphs into the song (caption + Lyrics
+//     button), exactly like the DM flow's card;
+//   - auto-fetch on → Music file item queues a bridge job; the checklist
+//     stays up and the bridge delivery morphs the message later;
+//   - auto-fetch off / capped / bridge down → compact Telegraph card.
 //
 // Never throws (a rejection would 500 and make Telegram redeliver).
 
@@ -23,13 +26,21 @@ import { getTrack, getAlbum } from "../services/deezer";
 import { getLyrics } from "../services/lrclib";
 import { createSongTelegraph } from "../services/telegraph";
 import { getTrackRecord, upsertTrack } from "../db/tracks";
+import {
+  countPendingByUser,
+  createAudioRequest,
+  expireStalePending,
+  setRequestTelegraphUrl,
+} from "../db/audioRequests";
+import { isAutoFetchEnabled, isUserAutoFetchEnabled } from "../db/settings";
 import { normalizeLyrics } from "../utils/lyrics";
-import { safeAnswer } from "../utils/telegram";
+import { buildAudioCaption, safeAnswer } from "../utils/telegram";
 import {
   InlineTrackProgress,
   buildInlineResultHtml,
   countLyricLines,
 } from "../utils/richMessages";
+import { AUTOFETCH_MAX_PENDING_PER_USER } from "../config";
 import { log, warn } from "../utils/logger";
 
 // In-flight dedup: one pipeline run per inline message (per isolate). A
@@ -57,7 +68,11 @@ export async function handleInlineTrackButton(ctx: Context, env: Env) {
     return;
   }
   await safeAnswer(ctx);
-  await startPipelineRun(env, { inlineMessageId, trackId });
+  await startPipelineRun(env, {
+    inlineMessageId,
+    trackId,
+    userId: String(ctx.from?.id ?? ""),
+  });
 }
 
 // chosen_inline_result: the user just sent an inline result — auto-start the
@@ -82,18 +97,22 @@ export async function handleChosenInlineResult(env: Env, chosen: any): Promise<v
   if (inFlight.has(inlineMessageId)) {
     return;
   }
-  await startPipelineRun(env, { inlineMessageId, trackId });
+  await startPipelineRun(env, {
+    inlineMessageId,
+    trackId,
+    userId: String(chosen?.from?.id ?? ""),
+  });
 }
 
 // Register and await a pipeline run, deduped per inline message (per
 // isolate). Callers check inFlight for their own user-facing busy feedback.
 async function startPipelineRun(
   env: Env,
-  args: { inlineMessageId: string; trackId: number },
+  args: { inlineMessageId: string; trackId: number; userId: string },
 ): Promise<void> {
-  const { inlineMessageId, trackId } = args;
+  const { inlineMessageId, trackId, userId } = args;
 
-  const run = runInlineTrackPipeline(env, { inlineMessageId, trackId })
+  const run = runInlineTrackPipeline(env, { inlineMessageId, trackId, userId })
     .catch((error) => warn("inline pipeline: run failed", error))
     .finally(() => inFlight.delete(inlineMessageId));
   inFlight.set(inlineMessageId, run);
@@ -102,9 +121,9 @@ async function startPipelineRun(
 
 async function runInlineTrackPipeline(
   env: Env,
-  args: { inlineMessageId: string; trackId: number },
+  args: { inlineMessageId: string; trackId: number; userId: string },
 ): Promise<void> {
-  const { inlineMessageId, trackId } = args;
+  const { inlineMessageId, trackId, userId } = args;
   const api = new Api(env.BOT_TOKEN);
 
   const progress = new InlineTrackProgress(api, inlineMessageId);
@@ -198,12 +217,111 @@ async function runInlineTrackPipeline(
     return;
   }
 
-  const markup: InlineKeyboardMarkup = {
+  const lyricsKeyboard: InlineKeyboardMarkup = {
     inline_keyboard: [[{ text: "Lyrics", url: telegraphUrl }]],
   };
-  const ok = await progress.finalizeText(
-    buildInlineResultHtml({ trackName, artistName, albumName, releaseDate, telegraphUrl }),
-    markup,
-  );
-  log("inline pipeline: done", JSON.stringify({ trackId, finalized: ok }));
+
+  // ── Music: cached file → auto-fetch → telegraph card ─────────────────────
+  // Same gate order as the DM flow (callbacks/search.ts): bridge configured,
+  // admin global switch, user preference. Shared pending cap.
+
+  // Cache reuse: a stored file_id morphs the message into the song directly
+  // (inline media edits accept previously-uploaded file_ids only).
+  if (trackRecord?.file_id) {
+    const caption = buildAudioCaption(trackName, artistName, telegraphUrl);
+    const ok = await progress.finalizeAsAudio(trackRecord.file_id, caption, lyricsKeyboard);
+    log("inline pipeline: reused stored audio", JSON.stringify({ trackId, ok }));
+    return;
+  }
+
+  const bridgeConfigured = Boolean(env.BRIDGE_CHAT_ID && env.TELEGRAM_API_ID && env.TELEGRAM_API_HASH);
+  const autoGetForUser = bridgeConfigured
+    && await isAutoFetchEnabled(env.DB).catch(() => false)
+    && await isUserAutoFetchEnabled(env.DB, userId).catch(() => false);
+
+  if (!autoGetForUser) {
+    const ok = await progress.finalizeText(
+      buildInlineResultHtml({ trackName, artistName, albumName, releaseDate, telegraphUrl }),
+      lyricsKeyboard,
+    );
+    log("inline pipeline: done (telegraph card)", JSON.stringify({ trackId, finalized: ok }));
+    return;
+  }
+
+  // Auto-fetch: claim a queue row for the bridge and leave the checklist up —
+  // the bridge delivery morphs the message into the audio later.
+  const queued = await enqueueInlineBridgeJob(env, {
+    userId,
+    trackId,
+    trackName,
+    artistName,
+    inlineMessageId,
+    telegraphUrl,
+  }).catch((error) => {
+    warn("inline pipeline: enqueue failed", error);
+    return false;
+  });
+
+  if (!queued) {
+    // Cap / queue full / bridge down: honest note + degrade to the card.
+    await progress.update({ stage: "music", musicNote: "failed" });
+    await progress.finalizeText(
+      buildInlineResultHtml({ trackName, artistName, albumName, releaseDate, telegraphUrl }),
+      lyricsKeyboard,
+    );
+    log("inline pipeline: done (card after queue failure)", JSON.stringify({ trackId }));
+    return;
+  }
+
+  await progress.update({ stage: "music", musicNote: "queued" });
+  log("inline pipeline: waiting for bridge delivery", JSON.stringify({ trackId, inlineMessageId }));
+}
+
+// Enqueue a deezload auto-fetch job for an inline send — inline variant of
+// enqueueAutoFetch in callbacks/search.ts. chatId 0 marks a chatless (inline)
+// row; delivery edits inline_message_id instead of DM-sending. Best-effort:
+// any failure resolves false and the caller degrades to the telegraph card.
+async function enqueueInlineBridgeJob(
+  env: Env,
+  data: {
+    userId: string;
+    trackId: number;
+    trackName: string;
+    artistName: string;
+    inlineMessageId: string;
+    telegraphUrl: string;
+  },
+): Promise<boolean> {
+  // Materialize TTL expiry first so stale rows don't pin the user at the cap.
+  await expireStalePending(env.DB);
+  const pending = await countPendingByUser(env.DB, data.userId);
+  if (pending >= AUTOFETCH_MAX_PENDING_PER_USER) {
+    log("autofetch: user at pending cap", data.userId, pending);
+    return false;
+  }
+
+  const token = crypto.randomUUID();
+  await createAudioRequest(env.DB, {
+    reqToken: token,
+    userId: data.userId,
+    chatId: 0,
+    trackId: data.trackId,
+    trackTitle: data.trackName,
+    artistName: data.artistName,
+    inlineMessageId: data.inlineMessageId,
+  });
+  // Bridge delivery builds its Lyrics button from the row.
+  await setRequestTelegraphUrl(env.DB, token, data.telegraphUrl);
+
+  const stub = env.BRIDGE_DO.get(env.BRIDGE_DO.idFromName("bridge"));
+  const res = await stub.fetch("https://bridge/enqueue", {
+    method: "POST",
+    body: JSON.stringify({ token, trackId: data.trackId, chatId: 0 }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; position?: number };
+  if (!body.ok) {
+    throw new Error(`bridge rejected job: ${body.error ?? res.status}`);
+  }
+  log("autofetch: inline job queued", JSON.stringify({ trackId: data.trackId, token, position: body.position ?? 1 }));
+  return true;
 }

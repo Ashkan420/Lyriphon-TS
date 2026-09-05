@@ -17,6 +17,10 @@ export type AudioRequestRow = {
   artist_name: string | null;
   telegraph_url: string | null;
   queued_msg_id: number | null;
+  // Set for inline-mode requests: the sent inline message this job should
+  // edit itself into (audio + Lyrics button) on delivery. DM requests stay
+  // NULL; inline rows use chat_id 0.
+  inline_message_id: string | null;
   status: AudioRequestStatus;
   created_at: number;
   updated_at: number;
@@ -34,6 +38,12 @@ async function ensureTable(db: D1Database) {
     } catch {
       await db.prepare("ALTER TABLE audio_requests ADD COLUMN queued_msg_id INTEGER").run();
     }
+    // Table predates inline_message_id — add it idempotently.
+    try {
+      await db.prepare("SELECT inline_message_id FROM audio_requests LIMIT 1").all();
+    } catch {
+      await db.prepare("ALTER TABLE audio_requests ADD COLUMN inline_message_id TEXT").run();
+    }
     tableReady = true;
   } catch {
     await db.prepare(`
@@ -47,6 +57,7 @@ async function ensureTable(db: D1Database) {
         artist_name TEXT,
         telegraph_url TEXT,
         queued_msg_id INTEGER,
+        inline_message_id TEXT,
         status TEXT NOT NULL DEFAULT 'pending',
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
         updated_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -66,14 +77,15 @@ export async function createAudioRequest(
     trackId: number;
     trackTitle: string;
     artistName: string;
+    inlineMessageId?: string;
   },
 ): Promise<void> {
   await ensureTable(db);
   await db.prepare(`
-    INSERT INTO audio_requests (req_token, user_id, chat_id, track_id, track_title, artist_name)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO audio_requests (req_token, user_id, chat_id, track_id, track_title, artist_name, inline_message_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `)
-    .bind(data.reqToken, data.userId, data.chatId, data.trackId, data.trackTitle, data.artistName)
+    .bind(data.reqToken, data.userId, data.chatId, data.trackId, data.trackTitle, data.artistName, data.inlineMessageId ?? null)
     .run();
 }
 
@@ -81,7 +93,7 @@ export async function getRequestByToken(db: D1Database, reqToken: string): Promi
   await ensureTable(db);
   const row = await db.prepare(`
     SELECT id, req_token, user_id, chat_id, track_id, track_title, artist_name,
-           telegraph_url, queued_msg_id, status, created_at, updated_at
+           telegraph_url, queued_msg_id, inline_message_id, status, created_at, updated_at
     FROM audio_requests WHERE req_token = ?
   `)
     .bind(reqToken)
