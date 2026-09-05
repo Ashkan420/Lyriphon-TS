@@ -10,9 +10,10 @@ import { handleCallbackQuery, processTextMessage } from "./handlers/callbacks";
 import { getSession } from "./session/index";
 import { SessionMode } from "./session/types";
 import { inMode } from "./session/transitions";
-import { safeDelete, cancelEdit, sendRemainingChunks } from "./utils/telegram";
+import { safeDelete, cancelEdit } from "./utils/telegram";
 import { clearAudioState } from "./session/flows";
-import { warn, formatLogsForTelegram } from "./utils/logger";
+import { warn, formatLogPage } from "./utils/logger";
+import { buildLogsKeyboard } from "./handlers/callbacks/logs";
 import { adminCommand, handleAdminCallback, isBotOwner } from "./handlers/admin";
 import { handleSettingsCommand } from "./handlers/settings";
 
@@ -102,16 +103,10 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     if (!isBotOwner(ctx, env)) {
       return;
     }
-    const chunks = formatLogsForTelegram();
-    await ctx.reply(chunks[0], {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "Refresh", callback_data: "logs_refresh", style: "primary" as const }],
-          [{ text: "Close", callback_data: "logs_close", style: "danger" as const }],
-        ],
-      },
+    const pg = formatLogPage(0);
+    await ctx.reply(pg.text, {
+      reply_markup: { inline_keyboard: buildLogsKeyboard(pg.page, pg.totalPages) },
     });
-    await sendRemainingChunks(ctx, chunks);
   });
 
   bot.command("multilingual", async (ctx) => {

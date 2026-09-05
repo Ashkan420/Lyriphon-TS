@@ -55,18 +55,6 @@ export async function safeEditMessage(ctx: Context, text: string): Promise<void>
   } catch {}
 }
 
-// Send log chunks 1..n as follow-up messages after the first chunk was
-// already delivered via reply/edit. Failures are ignored — logs are best-effort.
-export async function sendRemainingChunks(ctx: Context, chunks: string[]): Promise<void> {
-  for (let i = 1; i < chunks.length; i++) {
-    try {
-      await ctx.reply(chunks[i]);
-    } catch {
-      // ignore
-    }
-  }
-}
-
 // Delete the lingering "Send to which channel?" prompt, if any.
 export async function clearSendChannelPrompt(
   api: Api<RawApi>,

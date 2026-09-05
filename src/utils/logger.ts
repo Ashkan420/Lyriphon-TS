@@ -104,42 +104,71 @@ function allLogs(): LogEntry[] {
 // full lyrics/translations survive intact instead of being truncated away.
 const LOG_CHUNK_MAX = 3800;
 
-export function formatLogsForTelegram(limit = 40): string[] {
-  const logs = allLogs().slice(-limit);
+// Reserve for the per-page header so header + body never exceeds LOG_CHUNK_MAX.
+const LOG_HEADER_RESERVE = 80;
+const LOG_PAGE_CONTENT_MAX = LOG_CHUNK_MAX - LOG_HEADER_RESERVE;
+
+export type LogPage = { text: string; page: number; totalPages: number };
+
+export function formatLogPage(page = 0): LogPage {
+  const logs = allLogs();
   if (logs.length === 0) {
-    return ["📋 No logs yet."];
+    return { text: "📋 No logs yet.", page: 0, totalPages: 1 };
   }
 
-  const header = `📋 Recent logs (${logs.length})\n`;
-  const lines = logs.map((entry) => {
+  // Newest-first so page 0 (what /logs opens on) shows recent activity.
+  // Fragments from a single oversized entry stay contiguous after the reverse.
+  const reversed = [...logs].reverse();
+  const fragments: string[] = [];
+  for (const entry of reversed) {
     const time = new Date(entry.ts).toLocaleTimeString("en-US", { hour12: false });
     const levelTag = entry.level === "debug" ? "DBG" : entry.level.toUpperCase();
-    return `${time} [${levelTag}] ${entry.text}`;
-  });
+    let entryStr = `${time} [${levelTag}] ${entry.text}\n`;
+    if (entryStr.length <= LOG_PAGE_CONTENT_MAX) {
+      fragments.push(entryStr);
+    } else {
+      while (entryStr.length > LOG_PAGE_CONTENT_MAX) {
+        fragments.push(entryStr.slice(0, LOG_PAGE_CONTENT_MAX));
+        entryStr = entryStr.slice(LOG_PAGE_CONTENT_MAX);
+      }
+      if (entryStr.length) {
+        fragments.push(entryStr);
+      }
+    }
+  }
 
-  // Pack entries into chunks at entry boundaries; a single entry larger than
-  // a whole chunk (full lyrics dump) is hard-split so nothing is dropped.
-  const chunks: string[] = [];
-  let current = header;
-  for (const line of lines) {
-    let entry = line + "\n";
-    if (current.length + entry.length <= LOG_CHUNK_MAX) {
-      current += entry;
-      continue;
+  // Pack fragments into pages at entry/fragment boundaries.
+  const pages: string[][] = [];
+  let cur: string[] = [];
+  let curLen = 0;
+  for (const frag of fragments) {
+    if (curLen + frag.length <= LOG_PAGE_CONTENT_MAX) {
+      cur.push(frag);
+      curLen += frag.length;
+    } else {
+      if (cur.length) {
+        pages.push(cur);
+      }
+      cur = [frag];
+      curLen = frag.length;
     }
-    if (current.trim()) {
-      chunks.push(current);
-    }
-    while (entry.length > LOG_CHUNK_MAX) {
-      chunks.push(entry.slice(0, LOG_CHUNK_MAX));
-      entry = entry.slice(LOG_CHUNK_MAX);
-    }
-    current = entry;
   }
-  if (current.trim()) {
-    chunks.push(current);
+  if (cur.length) {
+    pages.push(cur);
   }
-  return chunks;
+
+  const totalPages = pages.length || 1;
+  let p = Math.floor(page);
+  if (!Number.isFinite(p) || p < 0) {
+    p = 0;
+  }
+  if (p >= totalPages) {
+    p = totalPages - 1;
+  }
+
+  const header = `📋 Logs — page ${p + 1}/${totalPages} · ${logs.length} entries\n`;
+  const body = pages[p] ? pages[p].join("") : "";
+  return { text: header + body, page: p, totalPages };
 }
 
 export function setDebug(enabled: boolean): void {

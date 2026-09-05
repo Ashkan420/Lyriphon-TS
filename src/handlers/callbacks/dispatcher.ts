@@ -12,7 +12,7 @@ import {
 } from "./edit";
 import { handleExpandEditMenu } from "./index";
 import { handleTranslateCallback } from "./translate";
-import { handleLogsRefreshCallback, handleLogsCloseCallback } from "./logs";
+import { handleLogsPageCallback, handleLogsCloseCallback } from "./logs";
 import { handleSettingsCallback } from "../settings";
 
 // Single stable entry point. `bot.ts` imports handleCallbackQuery /
@@ -59,8 +59,8 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
     return;
   }
 
-  if (data === "logs_refresh") {
-    await handleLogsRefreshCallback(ctx);
+  if (data === "logs_refresh" || data.startsWith("logs_page_")) {
+    await handleLogsPageCallback(ctx);
     return;
   }
 

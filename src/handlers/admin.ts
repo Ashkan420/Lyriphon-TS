@@ -2,9 +2,10 @@ import { Context } from "grammy";
 import { Env } from "../env";
 import { SessionDO } from "../do";
 import { SessionData } from "../session/types";
-import { formatLogsForTelegram, warn } from "../utils/logger";
-import { safeAnswer, sendRemainingChunks } from "../utils/telegram";
+import { formatLogPage, warn } from "../utils/logger";
+import { safeAnswer } from "../utils/telegram";
 import { isAutoFetchEnabled, setAutoFetchEnabled } from "../db/settings";
+import { buildLogsNavRow } from "./callbacks/logs";
 
 // Telegram button `style` is newer than some @grammyjs/types pins; match
 // the loose shape used by /logs and edit menus.
@@ -98,21 +99,22 @@ async function renderAdminSettings(
   }
 }
 
-async function renderAdminLogs(ctx: Context): Promise<void> {
-  const chunks = formatLogsForTelegram();
+async function renderAdminLogs(ctx: Context, page = 0): Promise<void> {
+  const pg = formatLogPage(page);
+  const rows: AdminButton[][] = [];
+  const nav = buildLogsNavRow(pg.page, pg.totalPages, "admin_logs_page_");
+  if (nav.length) {
+    rows.push(...(nav as AdminButton[][]));
+  }
+  rows.push([{ text: "Refresh", callback_data: `admin_logs_page_${pg.page}` }]);
+  rows.push([{ text: "⬅️ Back", callback_data: "admin_back" }]);
   try {
-    await ctx.editMessageText(chunks[0], {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "Refresh", callback_data: "admin_logs_refresh" }],
-          [{ text: "⬅️ Back", callback_data: "admin_back" }],
-        ],
-      },
+    await ctx.editMessageText(pg.text, {
+      reply_markup: { inline_keyboard: rows },
     });
   } catch {
     // ignore
   }
-  await sendRemainingChunks(ctx, chunks);
 }
 
 // D1 read failure degrades to OFF (fail closed) rather than crashing /admin.
@@ -186,13 +188,24 @@ export async function handleAdminCallback(
     return;
   }
 
+  if (data.startsWith("admin_logs_page_")) {
+    if (!sessionDo.debugEnabled) {
+      await renderAdminSettings(ctx, session, sessionDo, env);
+      return;
+    }
+    const raw = data.slice("admin_logs_page_".length);
+    const n = Number(raw);
+    await renderAdminLogs(ctx, Number.isNaN(n) ? 0 : n);
+    return;
+  }
+
   if (data === "admin_logs" || data === "admin_logs_refresh") {
     if (!sessionDo.debugEnabled) {
       // Debug was turned off elsewhere — bounce back to settings.
       await renderAdminSettings(ctx, session, sessionDo, env);
       return;
     }
-    await renderAdminLogs(ctx);
+    await renderAdminLogs(ctx, 0);
     return;
   }
 
