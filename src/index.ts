@@ -2,6 +2,7 @@ import { DEFAULT_WEBHOOK_PATH } from "./config";
 import { Env } from "./env";
 import { isBridgeChat, handleBridgeUpdate } from "./handlers/bridge";
 import { handleInlineQueryUpdate } from "./handlers/inlineSearch";
+import { handleChosenInlineResult } from "./handlers/inlinePipeline";
 export { SessionDO } from "./do";
 export { BridgeDO } from "./doBridge";
 
@@ -32,9 +33,15 @@ export default {
 
     // Inline queries are handled session-free: one inline_query per keystroke
     // would serialize through the user's SessionDO and the queued queries
-    // would expire ("query is too old") before being answered.
+    // would expire ("query is too old") before being answered. chosen_inline_result
+    // (requires BotFather Inline Feedback) auto-starts the lyrics pipeline —
+    // same session-free reasoning, and it must never block on a session.
     if (update.inline_query) {
       await handleInlineQueryUpdate(env, update.inline_query);
+      return new Response(null, { status: 200 });
+    }
+    if (update.chosen_inline_result) {
+      await handleChosenInlineResult(env, update.chosen_inline_result);
       return new Response(null, { status: 200 });
     }
 

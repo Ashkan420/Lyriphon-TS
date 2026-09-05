@@ -1,6 +1,11 @@
-// Inline-mode track pipeline: the 📄 Get Lyrics button on a message sent via
-// inline mode. Chatless sibling of callbacks/search.ts — the callback carries
-// an inline_message_id and NO chat/session context, so this pipeline must
+// Inline-mode track pipeline: runs the lyrics checklist on a message sent via
+// inline mode. Triggered two ways, deduped by the in-flight map:
+//   1. chosen_inline_result — the user just sent the result (auto-start).
+//   2. the 📄 Get Lyrics button — a chatless callback, for when Telegram
+//     drops/omits the chosen-result feedback or the user re-taps.
+//
+// Chatless sibling of callbacks/search.ts — the callback carries an
+// inline_message_id and NO chat/session context, so this pipeline must
 // never touch session.telegraph/session.audio (clobbering the sender's DM
 // flow state is a bug, and in groups the "session" isn't even the sender's).
 //
@@ -45,14 +50,48 @@ export async function handleInlineTrackButton(ctx: Context, env: Env) {
     return;
   }
 
-  const existing = inFlight.get(inlineMessageId);
-  if (existing) {
+  log("inline pipeline: button tap", JSON.stringify({ trackId, inlineMessageId }));
+
+  if (inFlight.has(inlineMessageId)) {
     await safeAnswer(ctx, "Already working on it!");
     return;
   }
-
   await safeAnswer(ctx);
-  log("inline pipeline: button tap", JSON.stringify({ trackId, inlineMessageId }));
+  await startPipelineRun(env, { inlineMessageId, trackId });
+}
+
+// chosen_inline_result: the user just sent an inline result — auto-start the
+// pipeline on the sent message. Only arrives when BotFather Inline Feedback
+// is enabled (100%), and inline_message_id is only present because every
+// result carries an inline keyboard. Best-effort: when the id is missing
+// (clients vary), nothing happens and the Get Lyrics button stays as the
+// manual fallback.
+export async function handleChosenInlineResult(env: Env, chosen: any): Promise<void> {
+  const inlineMessageId = chosen?.inline_message_id as string | undefined;
+  if (!inlineMessageId) {
+    return;
+  }
+  const trackId = Number(String(chosen?.result_id ?? "").replace("track_", ""));
+  if (Number.isNaN(trackId)) {
+    return;
+  }
+
+  log("inline pipeline: chosen result", JSON.stringify({ trackId, inlineMessageId }));
+  // No answer to send here; if a run is already in flight (double fire with
+  // an early button tap) the dedup below skips the duplicate.
+  if (inFlight.has(inlineMessageId)) {
+    return;
+  }
+  await startPipelineRun(env, { inlineMessageId, trackId });
+}
+
+// Register and await a pipeline run, deduped per inline message (per
+// isolate). Callers check inFlight for their own user-facing busy feedback.
+async function startPipelineRun(
+  env: Env,
+  args: { inlineMessageId: string; trackId: number },
+): Promise<void> {
+  const { inlineMessageId, trackId } = args;
 
   const run = runInlineTrackPipeline(env, { inlineMessageId, trackId })
     .catch((error) => warn("inline pipeline: run failed", error))
