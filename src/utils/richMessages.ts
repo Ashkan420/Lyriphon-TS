@@ -290,3 +290,135 @@ export function buildTrackResultHtml(options: {
 
   return body;
 }
+
+// Inline variant of the result card: the DM card's hints ("edit options
+// below", "send a music file") don't apply to a sent inline message, so the
+// inline path renders this compact form instead. No edit menu — the DM edit
+// menus operate on session state the inline flow deliberately doesn't touch.
+export function buildInlineResultHtml(options: {
+  trackName: string;
+  artistName: string;
+  albumName: string;
+  releaseDate: string;
+  telegraphUrl: string;
+}): string {
+  const esc = escapeRichHtml;
+  return (
+    `✅ <b>Telegraph Created</b>\n\n` +
+    `<blockquote>🎵 <b>${esc(options.trackName)}</b>\n` +
+    `👤 ${esc(options.artistName)}\n` +
+    `💽 ${esc(options.albumName)}\n` +
+    `📅 ${esc(options.releaseDate)}</blockquote>\n\n` +
+    `<a href="${esc(options.telegraphUrl)}">📖 Open Lyrics Page</a>`
+  );
+}
+
+// Inline message progress driver — session-free sibling of
+// TrackProgressReporter for the inline pipeline: the target is a sent inline
+// message (no chat), driven entirely through the *Inline edit methods by
+// inline_message_id. Same checklist rendering and rich→plain degradation as
+// the DM reporter.
+export class InlineTrackProgress {
+  private state: TrackProgressState = { stage: "info" };
+  private richBroken = false;
+  private dead = false;
+
+  get isDead(): boolean {
+    return this.dead;
+  }
+
+  constructor(
+    private readonly api: Api<RawApi>,
+    private readonly inlineMessageId: string,
+  ) {}
+
+  // Render the initial checklist onto the inline message.
+  async start(): Promise<void> {
+    await this.pushState();
+  }
+
+  async update(next: Partial<TrackProgressState>): Promise<void> {
+    if (this.dead) {
+      return;
+    }
+    const prevState = this.state;
+    this.state = { ...this.state, ...next };
+
+    // Identical content would be rejected by the API ("message is not
+    // modified") and kill rich mode — skip when nothing changed.
+    if (JSON.stringify(prevState) === JSON.stringify(this.state)) {
+      return;
+    }
+    await this.pushState();
+  }
+
+  // Terminal failure: put the error on the inline message.
+  async fail(text: string): Promise<void> {
+    if (this.dead) {
+      return;
+    }
+    try {
+      await this.api.editMessageTextInline(this.inlineMessageId, text);
+    } catch (error) {
+      warn("inline fail edit failed", error);
+      this.dead = true;
+    }
+  }
+
+  // Persist the result by editing the checklist into the final compact card.
+  // Returns false when the edit fails, so the caller can just log.
+  async finalizeText(text: string, markup: InlineKeyboardMarkup): Promise<boolean> {
+    if (this.dead) {
+      return false;
+    }
+    try {
+      await this.api.editMessageTextInline(this.inlineMessageId, text, {
+        parse_mode: "HTML",
+        reply_markup: markup,
+      });
+      return true;
+    } catch (error) {
+      warn("inline finalize edit failed", error);
+      return false;
+    }
+  }
+
+  private async pushState(): Promise<void> {
+    if (this.dead) {
+      return;
+    }
+    // Rich first, unless a previous rich edit failed (then plain only).
+    if (!this.richBroken) {
+      try {
+        await this.api.editMessageTextInline(this.inlineMessageId, {
+          html: renderTrackProgressHtml(this.state),
+          skip_entity_detection: true,
+        });
+        return;
+      } catch (error) {
+        // A rich parse failure falls back to a plain edit; anything else
+        // (message deleted, unknown id) kills the driver.
+        if (!looksLikeRichParseError(error)) {
+          this.dead = true;
+          warn("inline progress edit failed", error);
+          return;
+        }
+        this.richBroken = true;
+        warn("inline rich edit failed, falling back to plain", error);
+      }
+    }
+    try {
+      await this.api.editMessageTextInline(this.inlineMessageId, PLAIN_STAGE_TEXT[this.state.stage]);
+    } catch (error) {
+      this.dead = true;
+      warn("inline plain edit failed", error);
+    }
+  }
+}
+
+// Rich edits fail with a parse error when the html is rejected; other
+// failures (deleted message, expired id) mean no amount of retrying helps.
+function looksLikeRichParseError(error: unknown): boolean {
+  const text = String((error as any)?.message ?? error);
+  return /parse|rich|entity|can't parse/i.test(text);
+}

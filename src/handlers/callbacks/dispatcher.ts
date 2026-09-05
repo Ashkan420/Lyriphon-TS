@@ -3,6 +3,7 @@ import { SessionData } from "../../session/types";
 import { SessionMode } from "../../session/types";
 import { Env } from "../../env";
 import { handleTrackSelectionCallback } from "./search";
+import { handleInlineTrackButton } from "../inlinePipeline";
 import { handleAudioDecisionCallback, handleSendToChannelCallback } from "./audio";
 import {
   handleEditFieldCallback,
@@ -25,6 +26,12 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
   }
 
   if (data.startsWith("track_")) {
+    // Chatless = a sent inline message's 📄 Get Lyrics button: the session-
+    // free inline pipeline (the DM handler needs ctx.chat for its session).
+    if (!ctx.callbackQuery?.message && ctx.callbackQuery?.inline_message_id) {
+      await handleInlineTrackButton(ctx, env);
+      return;
+    }
     await handleTrackSelectionCallback(ctx, session, env);
     return;
   }

@@ -116,6 +116,12 @@ export async function songSearchCommand(ctx: Context, session: SessionData, env:
   await runSongSearch(ctx, session, env, query);
 }
 
+// A sent inline result's stub text (built in inlineSearch.ts) starts with 🎵.
+// Forwarding it to the bot's DM must not trigger a /song search on it.
+export function isInlineStubText(text: string): boolean {
+  return text.trimStart().startsWith("🎵");
+}
+
 // Plain text in a DM (while not in edit mode) acts like /song <text>.
 // Commands are handled by bot.command above or ignored here if unknown;
 // group text stays ignored.
@@ -125,6 +131,9 @@ export async function handlePlainTextInput(ctx: Context, session: SessionData, e
     return;
   }
   if (ctx.chat?.type !== "private") {
+    return;
+  }
+  if (isInlineStubText(text)) {
     return;
   }
   await runSongSearch(ctx, session, env, text);
