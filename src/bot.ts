@@ -4,7 +4,6 @@ import { SessionDO } from "./do";
 import { startCommand, helpCommand } from "./handlers/start";
 import { songSearchCommand, handleSearchPageCallback, handlePlainTextInput } from "./handlers/songSearch";
 import { handleMusicFile } from "./handlers/musicFile";
-import { inlineSearch } from "./handlers/inlineSearch";
 import { trackChannels } from "./handlers/channelTracker";
 import { handleCallbackQuery, processTextMessage } from "./handlers/callbacks";
 import { getSession } from "./session/index";
@@ -266,9 +265,9 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     await handleMusicFile(ctx, session, env);
   });
 
-  bot.on("inline_query", async (ctx) => {
-    await inlineSearch(ctx, env);
-  });
+  // Inline updates never reach the bot here: inline_query is handled
+  // session-free in src/index.ts (the SessionDO would serialize keystroke
+  // queries until they expire).
 
   bot.on("my_chat_member", async (ctx) => {
     await trackChannels(ctx, env.DB);
