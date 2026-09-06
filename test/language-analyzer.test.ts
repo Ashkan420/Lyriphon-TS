@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   analyzeLanguages,
   rebaseAnalysisForTarget,
+  countUntranslatedLines,
+  countIdenticalLines,
   getSourceFragments,
   getSourceFragmentNames,
   getLanguageUiLabel,
@@ -369,6 +371,98 @@ describe("rebaseAnalysisForTarget", () => {
   });
 });
 
+describe("countUntranslatedLines", () => {
+  const jaEnOriginal = [
+    "Mass に合わせた lifestyle 無理でも楽すりゃ不利",
+    "Freedom 謳歌 理不尽吹き飛ばす skill これ違う last minute",
+    "Kept walking on the wild side",
+    "I don't wanna fall asleep throughout my life",
+    "死んでも意味ある if it's after this",
+  ];
+
+  it("counts echoed source-script lines as untranslated", () => {
+    // Production failure shape: the model returned the lyrics unchanged.
+    const { untranslated, scriptLines } = countUntranslatedLines(
+      jaEnOriginal,
+      jaEnOriginal,
+      ["ja"],
+    );
+    expect(scriptLines).toBe(3); // the three lines containing kana/kanji
+    expect(untranslated).toBe(3);
+    expect(untranslated / scriptLines).toBeGreaterThan(0.5);
+  });
+
+  it("counts a real translation as fully translated", () => {
+    const translated = [
+      "A lifestyle tailored to the masses, but taking it easy puts me at a disadvantage",
+      "Celebrating freedom, blowing away the absurdity with skills",
+      "Kept walking on the wild side",
+      "I don't wanna fall asleep throughout my life",
+      "Even if I die, it has meaning if it's after this",
+    ];
+    const { untranslated, scriptLines } = countUntranslatedLines(
+      jaEnOriginal,
+      translated,
+      ["ja"],
+    );
+    expect(scriptLines).toBe(3);
+    expect(untranslated).toBe(0);
+  });
+
+  it("ignores whitespace and zero-width differences", () => {
+    const translated = [...jaEnOriginal];
+    translated[0] = "Mass に合わせた lifestyle 無理でも楽すりゃ不利 ​"; // trailing ZWSP
+    const { untranslated } = countUntranslatedLines(jaEnOriginal, translated, ["ja"]);
+    expect(untranslated).toBe(3); // still counted — only invisible chars differ
+  });
+
+  it("returns zeros when no source script is detectable", () => {
+    const latin = ["Der ganze Satz ist hier", "Zweite Zeile auch"];
+    const { untranslated, scriptLines } = countUntranslatedLines(latin, latin, ["de"]);
+    expect(scriptLines).toBe(0);
+    expect(untranslated).toBe(0);
+  });
+});
+
+describe("countIdenticalLines", () => {
+  const german = [
+    "Der innere Reichtum der Leute ist",
+    "Wie ein warmes Kerzenlicht",
+    "",
+    "Hoffentlich können wir es irgendwann verstehen",
+  ];
+
+  it("detects a full echo of a Latin-script song", () => {
+    const { identical, nonBlank } = countIdenticalLines(german, german);
+    expect(nonBlank).toBe(3);
+    expect(identical).toBe(3);
+    expect(identical / nonBlank).toBeGreaterThanOrEqual(0.95);
+  });
+
+  it("counts a real translation as not echoed", () => {
+    const translated = [
+      "The inner wealth of people is",
+      "Like a warm candlelight",
+      "",
+      "Hopefully we can understand it someday",
+    ];
+    const { identical, nonBlank } = countIdenticalLines(german, translated);
+    expect(nonBlank).toBe(3);
+    expect(identical).toBe(0);
+  });
+
+  it("skips blank lines instead of counting them as identical", () => {
+    const { identical, nonBlank } = countIdenticalLines(german, [
+      "Der innere Reichtum der Leute ist",
+      "Wie ein warmes Kerzenlicht",
+      "",
+      "The blank line above stays blank",
+    ]);
+    expect(nonBlank).toBe(3);
+    expect(identical).toBe(2); // only the first two lines are unchanged
+  });
+});
+
 describe("composeTranslationPrompt target rebasing", () => {
   it("Wild Side to English: Japanese becomes the source, no English source fragment", () => {
     // Regression for the production log: modules were {source:'en',
@@ -392,6 +486,32 @@ describe("composeTranslationPrompt target rebasing", () => {
     // English is the target — an English source/hint fragment must not appear.
     expect(system).not.toContain("ADDITIONAL SOURCE LANGUAGE — ENGLISH");
     expect(modules.secondary).not.toContain("en_hint");
+    // Code-switched song: the target language is IN the lyrics, so the
+    // mixed-language directive must be present with the anti-romaji rule.
+    expect(system).toContain("MIXED SOURCE AND TARGET LANGUAGE");
+    expect(system).toContain("This song mixes English with Japanese");
+    expect(system).toContain("do NOT transliterate them into Latin script");
+  });
+
+  it("Guren to English: no mixed-language block when the target is not in the lyrics", () => {
+    const lyrics = [
+      "Seid ihr das Essen? Nein, wir sind der Jäger!",
+      "Feuerroter pfeil und bogen...",
+      "",
+      "踏まれた花の 名前も知らずに",
+      "地に墜ちた落ちた鳥は 風を待ちわびる",
+      "祈ったところで 何も変わらない",
+      "《不本意な現状》を変えるのは 戦う覚悟だ...",
+      "",
+      "屍踏み越えて",
+      "進む意思を 嗤う豚よ",
+      "家畜の安寧 虚偽の繁栄",
+      "死せる餓狼の 自由を!",
+    ].join("\n");
+    const analysis = analyzeLanguages(lyrics)!;
+    const target = findLanguage("en")!;
+    const { system } = composeTranslationPrompt(lyrics, target, analysis, true);
+    expect(system).not.toContain("MIXED SOURCE AND TARGET LANGUAGE");
   });
 
   it("自由の翼 to English: ja primary with the strengthened de hint", () => {

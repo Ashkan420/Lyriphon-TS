@@ -175,7 +175,11 @@ const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
 export function getHintFragment(code: string): string {
   const notes = LANGUAGE_NOTES[code];
   if (!notes) return "";
-  const name = LANGUAGE_DISPLAY_NAMES[code] ?? code.toUpperCase();
+  const name = getLanguageDisplayName(code);
   const lines = notes.map(n => `- ${n}`).join("\n");
   return `ADDITIONAL SOURCE LANGUAGE — ${name}:\n${lines}\n- Treat all text in this language as source material to be fully translated. This directive takes precedence over the "iconic phrase" exception: translate ALL text in this language, including famous catchphrases, title phrases, and recurring refrains. Do not skip or leave any portion untranslated.`;
+}
+
+export function getLanguageDisplayName(code: string): string {
+  return LANGUAGE_DISPLAY_NAMES[code] ?? code.toUpperCase();
 }

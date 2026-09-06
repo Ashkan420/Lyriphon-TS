@@ -261,7 +261,7 @@ async function showRateLimitCooldown(
 type TranslateAttempt =
   | { kind: "rate_limited"; cooldownUntil: number }
   | { kind: "json"; rawJson: string; lines: string[] }
-  | { kind: "fail" };
+  | { kind: "fail"; reason?: "no_op" };
 
 // One translateLyrics call, normalized. Swallows unexpected throws (returns
 // "fail") so the caller's control flow stays flat across initial + retry.
@@ -272,15 +272,17 @@ async function runTranslateAttempt(
   langAnalysis?: LanguageAnalysis,
   multilingualEnabled = true,
   retryHint = false,
+  noOpRetry = false,
 ): Promise<TranslateAttempt> {
   try {
-    const result = await translateLyrics(env, lyrics, langCode as LanguageCode, langAnalysis, multilingualEnabled, retryHint);
+    const result = await translateLyrics(env, lyrics, langCode as LanguageCode, langAnalysis, multilingualEnabled, retryHint, noOpRetry);
     if (result.type === "rate_limited") {
       return { kind: "rate_limited", cooldownUntil: Date.now() + result.retryAfterSeconds * 1000 };
     }
     if (result.type === "success") {
       return { kind: "json", rawJson: result.rawJson, lines: result.lines };
     }
+    return { kind: "fail", reason: result.reason };
   } catch (error) {
     warn("translateLyrics threw unexpectedly", error);
   }
@@ -349,9 +351,11 @@ async function executeTranslation(
     // The dominant failure is a line-count mismatch from parseTranslationJson
     // (model dropped/merged a line). Retry once with the count hint before
     // surfacing the error — the bare retryHint path was previously unreachable
-    // because parse failures short-circuited here.
+    // because parse failures short-circuited here. No-op echoes get the
+    // harsher "you returned the original" instruction instead.
     const combined = await retryWithHint(
       ctx, session, env, cid, pickerMsgId, snapshotOriginal, langCode, langAnalysis, multilingualEnabled,
+      attempt.reason === "no_op",
     );
     if (combined) {
       session.telegraph.translatedLyrics ??= {};
@@ -398,6 +402,7 @@ async function executeTranslation(
 
     const retry = await retryWithHint(
       ctx, session, env, cid, pickerMsgId, snapshotOriginal, langCode, langAnalysis, multilingualEnabled,
+      false,
     );
     if (retry) {
       session.telegraph.translatedLyrics[cacheKey] = { originalHash, text: retry.rawJson };
@@ -416,9 +421,11 @@ async function executeTranslation(
   await finishTranslation(ctx, session, env, langCode, cid, pickerMsgId, combined);
 }
 
-// One retry with the line-count hint attached. Returns the retry's raw JSON
-// and combined text on success, null when still unusable (rate-limited, error,
-// or drift-detected combine). The caller owns caching and the error UI.
+// One retry with the line-count hint attached (or, when the first attempt was
+// a no-op echo, the harsher "translate the original" instruction). Returns the
+// retry's raw JSON and combined text on success, null when still unusable
+// (rate-limited, error, or drift-detected combine). The caller owns caching
+// and the error UI.
 async function retryWithHint(
   ctx: Context,
   session: SessionData,
@@ -429,10 +436,11 @@ async function retryWithHint(
   langCode: string,
   langAnalysis?: LanguageAnalysis,
   multilingualEnabled = true,
+  noOpRetry = false,
 ): Promise<{ rawJson: string; text: string } | null> {
   await safeEdit(ctx.api, cid!, pickerMsgId!, "🔄 Retrying translation...");
 
-  const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis, multilingualEnabled, true);
+  const retry = await runTranslateAttempt(env, snapshotOriginal, langCode, langAnalysis, multilingualEnabled, !noOpRetry, noOpRetry);
   if (retry.kind === "rate_limited") {
     session.telegraph.isTranslating = false;
     session.telegraph.translationCooldownUntil = retry.cooldownUntil;
