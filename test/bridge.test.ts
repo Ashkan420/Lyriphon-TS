@@ -434,6 +434,45 @@ describe("handleBridgeUpdate", () => {
     expect(notify).toBeDefined();
   });
 
+  it("deletes a queued notice persisted mid-delivery (send-vs-delivery race)", async () => {
+    const sendAudio = vi.fn(async (..._args: any[]) => {});
+    const deleteMessage = vi.fn(async (..._args: any[]) => ({}));
+    apiMethods.sendAudio = sendAudio;
+    apiMethods.deleteMessage = deleteMessage;
+
+    // Stateful D1: the delivery lookup sees the row WITHOUT a notice id (the
+    // track pipeline hasn't sent it yet), but by the fresh re-read inside
+    // deleteQueuedMsg the notice has been persisted (id 4242) — the exact
+    // race that used to leave the notice behind forever.
+    const delivered = row({ queued_msg_id: 4242 });
+    let lookupReads = 0;
+    const db = fakeD1(delivered) as any;
+    const innerPrepare = db.prepare.bind(db);
+    db.prepare = (sql: string) => {
+      if (sql.includes("SELECT id, req_token")) {
+        return {
+          bind() {
+            return {
+              async first<T>(): Promise<T | null> {
+                lookupReads += 1;
+                const r = lookupReads === 1 ? { ...delivered, queued_msg_id: null } : delivered;
+                return r as unknown as T;
+              },
+            };
+          },
+        };
+      }
+      return innerPrepare(sql);
+    };
+
+    await handleBridgeUpdate(makeEnv(db), bridgeUpdate());
+
+    expect(sendAudio).toHaveBeenCalledTimes(1);
+    expect(lastStatusStatement(db)?.bound).toContain("delivered");
+    // The stale-snapshot delete would have no-op'd here; the fresh read must.
+    expect(deleteMessage).toHaveBeenCalledWith(555, 4242);
+  });
+
   it("swallows internal errors without throwing (Telegram would redeliver on 500)", async () => {
     const db = {
       prepare() {

@@ -25,6 +25,7 @@ import { isAutoFetchEnabled, isUserAutoFetchEnabled, getUserLinkPreviewEnabled }
 import {
   countPendingByUser,
   createAudioRequest,
+  getRequestByToken,
   setRequestTelegraphUrl,
   setRequestQueuedMsg,
   expireStalePending,
@@ -294,14 +295,35 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   }
 
   // Deferred auto-fetch notice: after the result, so it sits below the
-  // Telegraph card; its id is persisted for self-deletion on delivery.
+  // Telegraph card; its id is persisted for self-deletion on delivery. The
+  // pre-send guard and post-persist re-check close the race where the bridge
+  // delivers before this notice is even sent (fast bridge, slow pipeline) —
+  // in that case the row is already terminal and the notice must not appear.
   if (session.telegraph.bridgeReqToken && queuedPosition) {
+    const reqToken = session.telegraph.bridgeReqToken;
     try {
-      const note = await ctx.api.sendMessage(
-        chatId,
-        `🎧 Auto-fetch queued${queuedPosition > 1 ? ` (position ${queuedPosition})` : ""} — the file will arrive here when ready.`,
-      );
-      await setRequestQueuedMsg(env.DB, session.telegraph.bridgeReqToken, note.message_id);
+      const row = await getRequestByToken(env.DB, reqToken);
+      if (!row || row.status !== "pending") {
+        log("autofetch: job already terminal, skipping queued notice", reqToken);
+      } else {
+        const note = await ctx.api.sendMessage(
+          chatId,
+          `🎧 Auto-fetch queued${queuedPosition > 1 ? ` (position ${queuedPosition})` : ""} — the file will arrive here when ready.`,
+        );
+        try {
+          await setRequestQueuedMsg(env.DB, reqToken, note.message_id);
+          // If the job reached a terminal state while the notice was in
+          // flight, the fresh-read delete raced us — clean up ourselves.
+          const after = await getRequestByToken(env.DB, reqToken);
+          if (after && after.status !== "pending") {
+            await safeDelete(ctx.api as any, chatId, note.message_id);
+          }
+        } catch (persistError) {
+          // Untracked notice can never be self-deleted — remove it.
+          warn("autofetch: failed to persist queued notice", persistError);
+          await safeDelete(ctx.api as any, chatId, note.message_id);
+        }
+      }
     } catch (error) {
       warn("autofetch: failed to send queued notice", error);
     }

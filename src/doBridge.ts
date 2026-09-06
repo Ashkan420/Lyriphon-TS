@@ -302,10 +302,13 @@ export class BridgeDO {
       const row = await getRequestByToken(this.env.DB, token);
       if (!row || row.status !== "pending" || isRequestExpired(row)) return;
       await setRequestStatus(this.env.DB, token, "failed");
-      if (row.queued_msg_id) {
+      // Fresh read for the notice id: it's persisted by the track pipeline
+      // after enqueue and can land while this failure is being processed.
+      const fresh = await getRequestByToken(this.env.DB, token);
+      if (fresh?.queued_msg_id) {
         try {
           const api = await this.botApi();
-          await api.deleteMessage(row.chat_id, row.queued_msg_id);
+          await api.deleteMessage(fresh.chat_id, fresh.queued_msg_id);
         } catch (deleteError) {
           warn("BridgeDO: failed to delete queued notice", deleteError);
         }

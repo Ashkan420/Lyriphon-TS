@@ -251,10 +251,14 @@ async function reportFailure(env: Env, token: string): Promise<void> {
 
 // The 🎧 queued notice self-destructs once the job reaches a terminal state.
 async function deleteQueuedMsg(env: Env, row: AudioRequestRow): Promise<void> {
-  if (!row.queued_msg_id) return;
   try {
+    // Fresh read, not the caller's snapshot: the notice is persisted by the
+    // track pipeline after enqueue, so it can land while delivery is in
+    // flight — a stale id here would leave the notice behind forever.
+    const fresh = await getRequestByToken(env.DB, row.req_token);
+    if (!fresh?.queued_msg_id) return;
     const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
-    await api.deleteMessage(row.chat_id, row.queued_msg_id);
+    await api.deleteMessage(fresh.chat_id, fresh.queued_msg_id);
   } catch (error) {
     warn("bridge: failed to delete queued notice", error);
   }
