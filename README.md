@@ -17,6 +17,7 @@ Search by name, or just send an audio file and let the bot figure out the track.
 - **Send to channels** — forward the tagged file to any channel where the bot is an admin; the bot tracks your channels automatically (via `my_chat_member` updates). This works after both manual attaches *and* auto-fetch deliveries.
 - **Inline mode** — type `@your_bot_name <query>` in any chat to search and share without opening a DM.
 - **Metadata & lyrics editing** — edit individual fields (track, artist, album, release date, author, cover URL, track/artist/album links) or rewrite lyrics across multiple messages, then re-publish the page.
+- **🔄 Refresh AI Summary** — every page edit resets Telegram's AI summary for the page; this button re-triggers it with an invisible touch (no visible change to the page).
 
 ### Auto-fetch bridge (deezload, optional)
 - **Zero-effort files** — with auto-fetch enabled, picking a track queues a fetch job immediately; the audio arrives in your chat with the Lyrics button attached, ready to forward to a channel.

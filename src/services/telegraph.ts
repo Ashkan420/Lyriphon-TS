@@ -94,7 +94,12 @@ export async function createSongTelegraph(env: Env, options: {
   };
 }
 
-export async function editSongPage(env: Env, pageData: TelegraphPageData, lyrics: string) {
+export async function editSongPage(env: Env, pageData: TelegraphPageData, lyrics: string, opts?: {
+  // Invisible-touch count for the AI-summary refresh: appended to the
+  // generated "Lyrics" heading as zero-width spaces so the edit always
+  // differs from the page's current content without any visible change.
+  summaryZwsCount?: number;
+}) {
   const content = buildPageContent({
     track: pageData.track,
     artist: pageData.artist,
@@ -105,6 +110,7 @@ export async function editSongPage(env: Env, pageData: TelegraphPageData, lyrics
     artistLink: pageData.artistLink,
     albumLink: pageData.albumLink,
     lyrics,
+    summaryZwsCount: opts?.summaryZwsCount ?? 0,
   });
 
   const response = await fetch("https://api.telegra.ph/editPage", {
@@ -142,6 +148,7 @@ function buildPageContent(options: {
   artistLink: string;
   albumLink: string;
   lyrics: string;
+  summaryZwsCount?: number;
 }): TelegraphNode[] {
   const { track, artist, album, releaseDate, albumCoverUrl, trackLink, artistLink, albumLink, lyrics } = options;
   const nodes: TelegraphNode[] = [];
@@ -164,7 +171,10 @@ function buildPageContent(options: {
   }
 
   nodes.push({ tag: "hr" });
-  nodes.push({ tag: "h3", children: ["Lyrics"] });
+  // Zero-width spaces here are the AI-summary refresh touch: invisible, and
+  // the heading is generated (never user-editable), so the touch can't
+  // collide with manually edited fields.
+  nodes.push({ tag: "h3", children: ["Lyrics" + "​".repeat(options.summaryZwsCount ?? 0)] });
   nodes.push(...formatLyricsForTelegraph(lyrics));
 
   return nodes;

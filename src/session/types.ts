@@ -60,6 +60,10 @@ export interface TelegraphFlowData extends BaseFlowData {
   multilingualEnabled?: boolean;
   // Token of the in-flight deezload auto-fetch job for this track, if any.
   bridgeReqToken?: string;
+  // Times the AI-summary refresh touch has fired for the current page; each
+  // refresh appends this many zero-width spaces to the "Lyrics" heading so the
+  // Telegraph edit always registers as a content change.
+  summaryRefreshCount?: number;
 }
 
 export interface SessionData {

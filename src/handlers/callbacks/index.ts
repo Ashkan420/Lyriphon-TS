@@ -16,9 +16,10 @@ export async function tryEditSongPage(
   lastData: unknown,
   lyrics: string,
   context: string,
+  opts?: Parameters<typeof editSongPage>[3],
 ): Promise<boolean> {
   try {
-    await editSongPage(env, lastData as any, lyrics);
+    await editSongPage(env, lastData as any, lyrics, opts);
     return true;
   } catch (error) {
     warn(`Failed to update Telegraph page (${context})`, error);
@@ -87,10 +88,15 @@ export function getDisplayLyrics(session: SessionData): string | null {
 }
 
 export function buildEditMenu(expanded = false) {
+  const refreshButton = { text: "🔄 Refresh AI Summary", callback_data: "refresh_summary" };
+
   if (!expanded) {
     return [
       [{ text: "✏️ Edit Telegraph", callback_data: "expand_edit_menu" }],
-      [{ text: "🌐 Translate Lyrics", callback_data: "translate:open" }],
+      [
+        { text: "🌐 Translate Lyrics", callback_data: "translate:open" },
+        refreshButton,
+      ],
     ];
   }
 
@@ -117,6 +123,7 @@ export function buildEditMenu(expanded = false) {
     ],
     [
       { text: "🌐 Translate Lyrics", callback_data: "translate:open" },
+      refreshButton,
     ],
   ];
 }

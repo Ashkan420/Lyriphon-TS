@@ -209,6 +209,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   session.telegraph.translationRequestId = undefined;
   session.telegraph.translationCooldownUntil = undefined;
   session.telegraph.pendingTranslationLang = undefined;
+  session.telegraph.summaryRefreshCount = undefined;
   resetTranslationState(session);
 
   // The bridge job now has a Lyrics link to attach to the delivered audio.

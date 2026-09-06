@@ -40,4 +40,27 @@ describe("editSongPage", () => {
     mockFetch(() => new Response("boom", { status: 500 }));
     await expect(editSongPage(env, pageData as any, "lyrics")).rejects.toThrow("500");
   });
+
+  it("leaves the Lyrics heading plain by default", async () => {
+    let body: any;
+    mockFetch((_url, init) => {
+      body = JSON.parse(init.body);
+      return new Response(JSON.stringify({ ok: true, result: { path: "p-1" } }), { status: 200 });
+    });
+    await editSongPage(env, pageData as any, "lyrics");
+    const heading = body.content.find((n: any) => n.tag === "h3");
+    expect(heading.children[0]).toBe("Lyrics");
+  });
+
+  it("appends the summaryZwsCount as zero-width spaces to the heading", async () => {
+    let body: any;
+    mockFetch((_url, init) => {
+      body = JSON.parse(init.body);
+      return new Response(JSON.stringify({ ok: true, result: { path: "p-1" } }), { status: 200 });
+    });
+    await editSongPage(env, pageData as any, "lyrics", { summaryZwsCount: 2 });
+    const heading = body.content.find((n: any) => n.tag === "h3");
+    expect(heading.children[0]).toBe("Lyrics​​");
+    expect(heading.children[0].length).toBe(8);
+  });
 });

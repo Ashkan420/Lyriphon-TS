@@ -36,6 +36,14 @@ describe("buildEditMenu", () => {
     expect(expanded[0][0].callback_data).toBe("edit_field_lyrics");
     expect(expanded[expanded.length - 1][0].callback_data).toBe("translate:open");
   });
+
+  it("includes the AI-summary refresh button in both variants", () => {
+    const collapsed = buildEditMenu(false);
+    expect(collapsed[1].some((b) => b.callback_data === "refresh_summary")).toBe(true);
+
+    const expanded = buildEditMenu(true);
+    expect(expanded[expanded.length - 1].some((b) => b.callback_data === "refresh_summary")).toBe(true);
+  });
 });
 
 describe("resetTranslationState", () => {

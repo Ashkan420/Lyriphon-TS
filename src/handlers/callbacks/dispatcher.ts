@@ -13,6 +13,7 @@ import {
 } from "./edit";
 import { handleExpandEditMenu } from "./index";
 import { handleTranslateCallback } from "./translate";
+import { handleRefreshSummaryCallback } from "./summary";
 import { handleLogsPageCallback, handleLogsCloseCallback } from "./logs";
 import { handleSettingsCallback } from "../settings";
 
@@ -63,6 +64,11 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
 
   if (data.startsWith("translate:")) {
     await handleTranslateCallback(ctx, session, env);
+    return;
+  }
+
+  if (data === "refresh_summary") {
+    await handleRefreshSummaryCallback(ctx, session, env);
     return;
   }
 
