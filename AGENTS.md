@@ -154,12 +154,12 @@ Bindings live in `wrangler.toml`. Prod secrets: `wrangler secret put …`.
 
 ## Translation pipeline
 
-`language-analyzer.ts` (script + franc → single/bilingual/multilingual)
+`language-analyzer.ts` (script heuristics + tinyld with Latin-projection second pass → single/bilingual/multilingual)
 → prompts (`prompts/base` + sources + targets)
 → `gemini.ts` (model chain, 429 backoff, permanent 400/401/403 bail)
 → `combine.ts` (line-aligned interleave / mismatch fallback)
 
-`franc` is in-memory (~ms). "Fetching lyrics…" delay is **network** (LRCLIB/Telegraph/Deezer), not language detection.
+`tinyld` is in-memory (~ms). "Fetching lyrics…" delay is **network** (LRCLIB/Telegraph/Deezer), not language detection.
 
 ## Testing conventions
 
@@ -171,7 +171,7 @@ Bindings live in `wrangler.toml`. Prod secrets: `wrangler secret put …`.
 ## Style / change discipline
 
 - Smallest diff that fixes the root cause; reuse existing helpers (`utils/`, `session/flows`, db patterns).
-- No new dependencies if a few lines or an existing package works (`grammy`, `franc` only in runtime deps).
+- No new dependencies if a few lines or an existing package works (`grammy`, `tinyld` only in runtime deps).
 - Match local patterns: lazy `ensureTable` in db modules, `warn`/`debug` from `utils/logger`, graceful external-API failure messages.
 - Type-only imports where needed (`import type { … } from "@grammyjs/types"` for Telegram types — not always re-exported from `grammy`).
 - `findLanguage` / `SUPPORTED_LANGUAGES` / `LanguageCode` live in `services/translation/types.ts`, not `language-analyzer.ts`.

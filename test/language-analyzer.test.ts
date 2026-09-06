@@ -108,34 +108,34 @@ describe("analyzeLanguages", () => {
     expect(result!.primary.code).toBe("he");
   });
 
-  it("detects Greek via franc", () => {
+  it("detects Greek via tinyld", () => {
     const lyrics = "Σ' αγαπώ και δεν μπορώ να ζω χωρίς εσένα\n".repeat(6);
     const result = analyzeLanguages(lyrics);
     expect(result).toBeDefined();
     expect(result!.primary.code).toBe("el");
   });
 
-  it("detects Indonesian via franc", () => {
+  it("detects Indonesian via tinyld", () => {
     const lyrics = "Aku mencintaimu dengan sepenuh hatiku\n".repeat(6);
     const result = analyzeLanguages(lyrics);
     expect(result).toBeDefined();
     expect(result!.primary.code).toBe("id");
   });
 
-  it("detects Polish via franc", () => {
+  it("detects Polish via tinyld", () => {
     const lyrics = "Kocham cię bardziej niż wczoraj i mniej niż jutro\n".repeat(6);
     const result = analyzeLanguages(lyrics);
     expect(result).toBeDefined();
     expect(result!.primary.code).toBe("pl");
   });
 
-  it("falls back to franc for Latin-script languages", () => {
+  it("falls back to tinyld for Latin-script languages", () => {
     const lyrics =
       "When the morning comes we will rise again\n" +
       "Through the shadows and the pouring rain\n".repeat(8);
     const result = analyzeLanguages(lyrics);
     expect(result).toBeDefined();
-    // franc should identify English given enough repeated Latin text
+    // tinyld should identify English given enough repeated Latin text
     expect(result!.primary.code).toBe("en");
   });
 
@@ -164,6 +164,84 @@ describe("analyzeLanguages", () => {
     const result = analyzeLanguages(lyrics);
     expect(result).toBeDefined();
     expect(result!.all.length).toBeLessThanOrEqual(4);
+  });
+
+  // ── Real-song regressions (lyrics fetched from LRCLIB) ────────────────────
+
+  it("Vogel Im Käfig: pure German song stays single with no Dutch hint", () => {
+    // Regression: franc scored de 1.00 / nl 0.94 (nearly tied Germanic
+    // scores), which classified this as bilingual and injected a bogus
+    // nl_hint into the translation prompt. tinyld's calibrated scores put
+    // da/no at ~0.002 so the MIN_SCORE filter drops them.
+    const lyrics = [
+      "Der innere Reichtum der Leute ist",
+      "Wie Licht bunt, durch Farbgies hereinzuscheinen",
+      "Das angeneme tägliche Leben Ist",
+      "Wie ein warmes Kerzenlicht",
+      "",
+      "Die sehr weite grüne Erde",
+      "Das reiche schöne Wasser",
+      "Die grandjose Natur sorgt immer noch für ihre Kinder",
+      "",
+      "Hoffentlich können wir es irgendwann verstehen",
+      "Dieses sinnerfüllte Leben",
+      "",
+      "Die Feindseligkeit, die uns trennt",
+      "Der 一つの大陸 —— Die Wand",
+    ].join("\n");
+    const result = analyzeLanguages(lyrics)!;
+    expect(result.primary.code).toBe("de");
+    expect(result.mode).toBe("single");
+    expect(getSourceFragmentNames(result, true)).toEqual({ source: "de", secondary: ["none"] });
+  });
+
+  it("Guren no Yumiya: Japanese primary, iconic German opener does not hijack", () => {
+    // The song opens with German ("Seid ihr das Essen?") but is overwhelmingly
+    // Japanese — script detection pins ja and the model must not flip it.
+    const lyrics = [
+      "Seid ihr das Essen? Nein, wir sind der Jäger!",
+      "Feuerroter pfeil und bogen...",
+      "",
+      "踏まれた花の 名前も知らずに",
+      "地に墜ちた落ちた鳥は 風を待ちわびる",
+      "祈ったところで 何も変わらない",
+      "《不本意な現状》を変えるのは 戦う覚悟だ...",
+      "",
+      "屍踏み越えて",
+      "進む意思を 嗤う豚よ",
+      "家畜の安寧 虚偽の繁栄",
+      "死せる餓狼の 自由を!",
+    ].join("\n");
+    const result = analyzeLanguages(lyrics)!;
+    expect(result.primary.code).toBe("ja");
+    expect(getSourceFragmentNames(result, true).source).toBe("ja");
+  });
+
+  it("自由の翼: Japanese + German verses keep both languages in the analysis", () => {
+    // Genuine bilingual song — German opening verses + Japanese body. ja is
+    // primary (kana script pin) and German must remain a meaningful secondary
+    // so the de hint fragment reaches the prompt.
+    const lyrics = [
+      "O mein Freund! Jetzt hier ist ein Sieg",
+      "Dies ist der grosses Gloria",
+      "O, mein Freund! Feiern wir diesen Sieg",
+      "Fur den nachsten Kampf!",
+      "",
+      "「無意味な死であった」と 言わせない",
+      "最後の《一矢》になるまで",
+      "",
+      "Der feind ist grausam Wir bringen",
+      "Der feind ist riesig Wir springen",
+      "",
+      "Jeder von uns ist eine Feder",
+      "Fliegt an der Hoffnung",
+      "",
+      "屑のままの 意思でも",
+      "本物の《剣》になるまで",
+    ].join("\n");
+    const result = analyzeLanguages(lyrics)!;
+    expect(result.primary.code).toBe("ja");
+    expect(result.all.map(d => d.code)).toContain("de");
   });
 });
 
