@@ -85,7 +85,7 @@ export async function handleInlineQueryUpdate(env: Env, inlineQuery: any): Promi
     newestQueryIds.set(userKey, queryId);
 
     log("inline search:", JSON.stringify(queryText));
-    const results = await searchTracks(queryText, 15);
+    const results = await searchTracks(queryText, 50);
     if (!results) {
       log("inline search failed for", JSON.stringify(queryText));
       await answerEmpty(api, queryId, 60);
