@@ -177,5 +177,5 @@ export function getHintFragment(code: string): string {
   if (!notes) return "";
   const name = LANGUAGE_DISPLAY_NAMES[code] ?? code.toUpperCase();
   const lines = notes.map(n => `- ${n}`).join("\n");
-  return `ADDITIONAL SOURCE LANGUAGE — ${name}:\n${lines}\n- Treat all text in this language as source material to be fully translated. Do not skip or leave any portion untranslated.`;
+  return `ADDITIONAL SOURCE LANGUAGE — ${name}:\n${lines}\n- Treat all text in this language as source material to be fully translated. This directive takes precedence over the "iconic phrase" exception: translate ALL text in this language, including famous catchphrases, title phrases, and recurring refrains. Do not skip or leave any portion untranslated.`;
 }

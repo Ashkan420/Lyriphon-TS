@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   analyzeLanguages,
+  rebaseAnalysisForTarget,
   getSourceFragments,
   getSourceFragmentNames,
-  isSourceLanguage,
   getLanguageUiLabel,
 } from "../src/services/translation/language-analyzer";
+import { composeTranslationPrompt } from "../src/services/translation/prompts";
+import { findLanguage } from "../src/services/translation/types";
 
 describe("analyzeLanguages", () => {
   it("returns undefined for empty or whitespace input", () => {
@@ -307,19 +309,153 @@ describe("getSourceFragmentNames", () => {
   });
 });
 
-describe("isSourceLanguage", () => {
-  it("is true when primary matches with high confidence", () => {
-    const analysis = analyzeLanguages("君が笑うたびに 世界が輝く\n涙のあとには 優しさが咲く");
-    expect(isSourceLanguage(analysis, "ja")).toBe(true);
+describe("rebaseAnalysisForTarget", () => {
+  // Wild Side (ALI) shape: Japanese-English mixed, en slightly ahead.
+  const wildSide = [
+    "Mass に合わせた lifestyle 無理でも楽すりゃ不利",
+    "Freedom 謳歌 理不尽吹き飛ばす skill これ違う last minute",
+    "Merci, au revoir",
+    "Kept walking on the wild side",
+    "I don't wanna fall asleep throughout my life",
+  ].join("\n");
+
+  it("drops the target language and promotes the remainder to primary", () => {
+    const analysis = analyzeLanguages(wildSide)!;
+    // Sanity: both languages detected with en ahead.
+    expect(analysis.primary.code).toBe("en");
+    expect(analysis.all.map(d => d.code)).toContain("ja");
+    const rebased = rebaseAnalysisForTarget(analysis, "en")!;
+    expect(rebased.primary.code).toBe("ja");
+    expect(rebased.all.map(d => d.code)).not.toContain("en");
   });
 
-  it("is false for a different target language", () => {
-    const analysis = analyzeLanguages("君が笑うたびに 世界が輝く\n涙のあとには 優しさが咲く");
-    expect(isSourceLanguage(analysis, "en")).toBe(false);
+  it("is symmetric: rebasing a ja-primary mix for ja promotes en", () => {
+    const analysis = analyzeLanguages(wildSide)!;
+    const rebased = rebaseAnalysisForTarget(analysis, "ja")!;
+    expect(rebased.primary.code).toBe("en");
+    expect(rebased.all.map(d => d.code)).not.toContain("ja");
   });
 
-  it("is false for undefined analysis", () => {
-    expect(isSourceLanguage(undefined, "ja")).toBe(false);
+  it("renormalizes shares so the remainder sums to 1", () => {
+    const analysis = analyzeLanguages(wildSide)!;
+    const rebased = rebaseAnalysisForTarget(analysis, "en")!;
+    const total = rebased.all.reduce((s, d) => s + d.score, 0);
+    expect(total).toBeCloseTo(1, 5);
+  });
+
+  it("mostly-fa song with an Arabic remainder rebases to Arabic primary", () => {
+    // Realistic shapes: enough fa and ar lines for each to register.
+    const fa = "دلم گرفته گیرم بگیر که خوبی و من بسازم دل من\n".repeat(6);
+    const ar = "قلبي معك وروحي في سكون الليل وأنت بعيد والليل طويل\n".repeat(4);
+    const analysis = analyzeLanguages(fa + ar)!;
+    expect(analysis.primary.code).toBe("fa");
+    const rebased = rebaseAnalysisForTarget(analysis, "fa")!;
+    expect(rebased.primary.code).toBe("ar");
+  });
+
+  it("returns the analysis unchanged when the target is not detected", () => {
+    const analysis = analyzeLanguages("君が笑うたびに 世界が輝く\n涙のあとには 優しさが咲く")!;
+    expect(rebaseAnalysisForTarget(analysis, "en")).toBe(analysis);
+  });
+
+  it("returns undefined when nothing translatable remains", () => {
+    const analysis = analyzeLanguages("When the morning comes we will rise again\n".repeat(6))!;
+    expect(analysis.primary.code).toBe("en");
+    expect(rebaseAnalysisForTarget(analysis, "en")).toBeUndefined();
+  });
+
+  it("returns undefined for undefined analysis", () => {
+    expect(rebaseAnalysisForTarget(undefined, "en")).toBeUndefined();
+  });
+});
+
+describe("composeTranslationPrompt target rebasing", () => {
+  it("Wild Side to English: Japanese becomes the source, no English source fragment", () => {
+    // Regression for the production log: modules were {source:'en',
+    // secondary:['ja_hint']} with target en — the model was told English was
+    // the source language and romaji'd the Japanese on its first attempt.
+    const lyrics = [
+      "Mass に合わせた lifestyle 無理でも楽すりゃ不利",
+      "Freedom 謳歌 理不尽吹き飛ばす skill これ違う last minute",
+      "Merci, au revoir",
+      "Pride は邪魔する猛者, donc vas-y jete ca",
+      "全て tryし困憊, 笛に救われ halftime",
+      "",
+      "Kept walking on the wild side",
+      "I don't wanna fall asleep throughout my life",
+    ].join("\n");
+    const analysis = analyzeLanguages(lyrics)!;
+    const target = findLanguage("en")!;
+    const { system, modules } = composeTranslationPrompt(lyrics, target, analysis, true);
+    expect(modules.source).toBe("ja");
+    expect(system).toContain("SOURCE LANGUAGE — JAPANESE");
+    // English is the target — an English source/hint fragment must not appear.
+    expect(system).not.toContain("ADDITIONAL SOURCE LANGUAGE — ENGLISH");
+    expect(modules.secondary).not.toContain("en_hint");
+  });
+
+  it("自由の翼 to English: ja primary with the strengthened de hint", () => {
+    // Regression for the production log: German verses survived translation
+    // because base rule 24's "iconic phrase" exception outranked the hint.
+    // The full song is 64 lines with a kana ratio of ~18% (per the log);
+    // these are its actual Japanese verses plus the German ones.
+    const lyrics = [
+      "O mein Freund! Jetzt hier ist ein Sieg",
+      "Dies ist der grosses Gloria",
+      "O, mein Freund! Feiern wir diesen Sieg",
+      "Fur den nachsten Kampf!",
+      "",
+      "「無意味な死であった」と 言わせない",
+      "最後の《一矢》になるまで",
+      "",
+      "Der feind ist grausam Wir bringen",
+      "Der feind ist riesig Wir springen",
+      "",
+      "両手には《鋼刃》",
+      "唄うのは《凱歌》",
+      "背中には《自由の翼》",
+      "(Diese elenden Biester)",
+      "握り締めた決意を 左胸に",
+      "斬り裂くのは《愚行の螺旋》",
+      "(Werden vernichtet!)",
+      "蒼穹を舞う《自由の翼》",
+      "",
+      "鳥は飛ぶ為に 其の殻を破ってきた",
+      "無様に 地を這う為じゃないだろ？",
+      "お前の翼は 何の為にある",
+      "籠の中の空は 狭過ぎるだろう？",
+      "",
+      "Die Freiheit und der Tod",
+      "Die beiden sind Zwillinge",
+      "Die Freiheit oder der Tod?",
+      "Unser Freund ist ein!",
+      "",
+      "何の為に 生まれて来たのかなんて",
+      "小難しい事は 解らないけど",
+      "例え 其れが 過ちだったとしても",
+      "何の為に 生きているかは 判る",
+      "其れは 理屈じゃない",
+      "存在 故の「自由」！",
+      "",
+      "Rechter Weg? Linker Weg?",
+      "Na, ein Weg welcher ist?",
+      "Der Freund? Der Feind?",
+      "Mensch, Sie welche sind?",
+      "",
+      "隠された真実は 衝撃の嚆矢だ",
+      "鎖された其の 深層と",
+      "表層に潜む《巨人達》",
+      "崩れ然る 固定観念",
+      "迷いを 抱きながら",
+      "其れでも尚 「自由」へ進め！",
+    ].join("\n");
+    const analysis = analyzeLanguages(lyrics)!;
+    const target = findLanguage("en")!;
+    const { system, modules } = composeTranslationPrompt(lyrics, target, analysis, true);
+    expect(modules.source).toBe("ja");
+    expect(modules.secondary).toContain("de_hint");
+    expect(system).toContain('takes precedence over the "iconic phrase" exception');
+    expect(system).toContain("SOURCE LANGUAGE — JAPANESE");
   });
 });
 

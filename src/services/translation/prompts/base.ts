@@ -41,5 +41,5 @@ TRANSLATION RULES:
 
 MULTILINGUAL SONGS:
 23. When a song contains multiple languages, translate ALL foreign text into the target language. Do not leave any foreign phrases untranslated unless rule 24 applies.
-24. EXCEPTION: If a foreign phrase is a well-known title, catchphrase, or iconic expression AND its meaning is clearly conveyed in surrounding lines, you MAY keep the original phrase untranslated. Use judgment — if removing the original loses emotional impact, translate it.
+24. EXCEPTION: If a foreign phrase is a well-known title, catchphrase, or iconic expression AND its meaning is clearly conveyed in surrounding lines, you MAY keep the original phrase untranslated. Use judgment — if removing the original loses emotional impact, translate it. This exception NEVER applies to text in an ADDITIONAL SOURCE LANGUAGE listed below — those directives override it; translate that text fully.
 25. When translating mixed-language lines, ensure the translation reads naturally as a single language, not as fragments stitched together.`;

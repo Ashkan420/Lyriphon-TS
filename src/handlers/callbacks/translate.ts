@@ -4,8 +4,8 @@ import { safeAnswer, safeEdit, safeDelete } from "../../utils/telegram";
 import { warn } from "../../utils/logger";
 import { translateLyrics, TranslationResult } from "../../services/translation/index";
 import {
-  isSourceLanguage,
   getLanguageUiLabel,
+  rebaseAnalysisForTarget,
   LanguageAnalysis,
 } from "../../services/translation/language-analyzer";
 import {
@@ -150,13 +150,17 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
       return;
     }
 
-    // English stays selectable even when detection flags English — franc /
-    // script detection produces false positives (mixed or transliterated
-    // lyrics), so users can force an English translation regardless.
-    if (
-      langCode !== "en" &&
-      isSourceLanguage(session.telegraph.languageAnalysis, langCode)
-    ) {
+    // English stays selectable even when detection flags English — detection
+    // produces false positives (mixed or transliterated lyrics), so users can
+    // force an English translation regardless.
+    //
+    // For other targets, block only when nothing translatable remains: the
+    // analysis rebased for the target drops the target language itself, so a
+    // mostly-Persian song with an Arabic remainder still translates to fa
+    // (the Arabic lines get translated; Persian passes through unchanged via
+    // base rule 17). No analysis at all still translates as before.
+    const la = session.telegraph.languageAnalysis;
+    if (langCode !== "en" && la && !rebaseAnalysisForTarget(la, langCode)) {
       await safeAnswer(ctx, "Lyrics already appear to be in this language.");
       return;
     }
