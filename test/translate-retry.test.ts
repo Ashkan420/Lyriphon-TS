@@ -142,6 +142,56 @@ describe("translate retry button", () => {
     expect(session.telegraph.translationCooldownUntil).toBeGreaterThan(Date.now());
   });
 
+  it("clicking the active language re-translates and replaces the cached translation", async () => {
+    const session = sessionWithLyrics();
+    session.telegraph.activeLang = "fa";
+    const lyrics = session.telegraph.originalLyrics!;
+    const cacheKey = `fa:${hashString(lyrics)}`;
+    session.telegraph.translatedLyrics = {
+      [cacheKey]: {
+        originalHash: hashString(lyrics),
+        text: JSON.stringify({ lines: [{ n: 1, t: "old" }, { n: 2, t: "old" }, { n: 3, t: "old" }] }),
+      },
+    };
+
+    const newJson = JSON.stringify({ lines: [{ n: 1, t: "۱" }, { n: 2, t: "۲" }, { n: 3, t: "۳" }] });
+    vi.stubGlobal("fetch", vi.fn(async () => geminiSuccess(["۱", "۲", "۳"])));
+
+    const { ctx, api } = makeCtx("translate:lang:fa");
+    await handleTranslateCallback(ctx, session, envWith());
+
+    expect(ctx.answerCallbackQuery).not.toHaveBeenCalledWith(expect.objectContaining({ text: "Already showing this language" }));
+    expect(JSON.parse(session.telegraph.translatedLyrics![cacheKey].text)).toEqual(JSON.parse(newJson));
+    const { text } = lastEditCall(api);
+    expect(text).toContain("✅ Lyrics translated");
+    expect(session.telegraph.activeLang).toBe("fa");
+  });
+
+  it("cached translation for a non-active language still re-applies without a Gemini call", async () => {
+    const session = sessionWithLyrics();
+    session.telegraph.activeLang = "en";
+    const lyrics = session.telegraph.originalLyrics!;
+    session.telegraph.translatedLyrics = {
+      [`fa:${hashString(lyrics)}`]: {
+        originalHash: hashString(lyrics),
+        text: JSON.stringify({ lines: [{ n: 1, t: "۱" }, { n: 2, t: "۲" }, { n: 3, t: "۳" }] }),
+      },
+    };
+
+    const fetchMock = vi.fn(async () => {
+      throw new Error("should not fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { ctx, api } = makeCtx("translate:lang:fa");
+    await handleTranslateCallback(ctx, session, envWith());
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const { text } = lastEditCall(api);
+    expect(text).toContain("Persian lyrics added");
+    expect(session.telegraph.activeLang).toBe("fa");
+  });
+
   it("retry re-applies a cached translation without a Gemini call", async () => {
     const session = sessionWithLyrics();
     session.telegraph.pendingTranslationLang = "fa";

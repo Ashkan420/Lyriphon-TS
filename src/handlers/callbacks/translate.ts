@@ -140,10 +140,9 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
       return;
     }
 
-    if (session.telegraph.activeLang === langCode) {
-      await safeAnswer(ctx, "Already showing this language");
-      return;
-    }
+    // Clicking the currently displayed language re-runs the translation
+    // (fresh Gemini output replaces the cached one) instead of no-op'ing.
+    const isRetranslate = session.telegraph.activeLang === langCode;
 
     const language = findLanguage(langCode);
     if (!language) {
@@ -176,7 +175,7 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
     const pickerMsgId = session.telegraph.translateMessageId;
     const cid = chatId(ctx);
 
-    await applyCachedOrTranslate(ctx, session, env, langCode, pickerMsgId, cid);
+    await applyCachedOrTranslate(ctx, session, env, langCode, pickerMsgId, cid, isRetranslate);
     return;
   }
 }
@@ -184,7 +183,8 @@ export async function handleTranslateCallback(ctx: Context, session: SessionData
 // Cache-hit path shared by the language picker and translate:retry: when a
 // valid translation is already cached for this lang + lyrics, re-apply it to
 // the Telegraph page without a second Gemini call; otherwise run a fresh
-// executeTranslation.
+// executeTranslation. forceFresh (re-translate of the active language) skips
+// the cache so the fresh result replaces the old one.
 async function applyCachedOrTranslate(
   ctx: Context,
   session: SessionData,
@@ -192,6 +192,7 @@ async function applyCachedOrTranslate(
   langCode: string,
   pickerMsgId: number | undefined,
   cid: number | undefined,
+  forceFresh = false,
 ) {
   const language = findLanguage(langCode);
   if (!language) return;
@@ -206,7 +207,7 @@ async function applyCachedOrTranslate(
 
   const originalHash = hashString(originalLyrics);
   const cacheKey = `${langCode}:${originalHash}`;
-  const cached = session.telegraph.translatedLyrics?.[cacheKey];
+  const cached = forceFresh ? undefined : session.telegraph.translatedLyrics?.[cacheKey];
 
   if (cached) {
     const originalLineCount = originalLyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
