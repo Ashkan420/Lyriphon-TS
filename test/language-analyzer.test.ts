@@ -199,6 +199,48 @@ describe("analyzeLanguages", () => {
     expect(getSourceFragmentNames(result, true)).toEqual({ source: "de", secondary: ["none"] });
   });
 
+  it("Japanese-dominant song with a Korean bridge keeps the ko hint", () => {
+    // Regression for the tinyld switch: tinyld's full pass returns ja:1 and
+    // drops Korean entirely (sparse detections), which lost the ko_hint
+    // franc used to provide. The Hangul line partition must recover it.
+    const lyrics = [
+      "君が笑うたびに 世界が輝く",
+      "涙のあとには 優しさが咲く",
+      "風が運ぶ命の歌を歌う",
+      "君の瞳に映る星を数える",
+      "明日への道を歩き出すよ",
+      "夜の向こうへと続いている",
+      "",
+      "밤하늘 별들을 세며 너를 생각해",
+      "사랑은 멀리서도 느껴지는 거야",
+    ].join("\n");
+    const result = analyzeLanguages(lyrics)!;
+    expect(result.primary.code).toBe("ja");
+    expect(result.all.map(d => d.code)).toContain("ko");
+    expect(getSourceFragmentNames(result, true).secondary).toContain("ko_hint");
+  });
+
+  it("Korean-dominant song with a Japanese bridge pins ko, not ja", () => {
+    // Regression for the pin order: SCRIPT_PATTERNS is declaration-ordered
+    // and ja is first — first-match-wins pinned kana over the Hangul
+    // majority and misranked a mostly-Korean song as ja-primary. The pin
+    // must go to the highest-ratio script.
+    const lyrics = [
+      "밤하늘 별들을 세며 너를 생각해",
+      "사랑은 멀리서도 느껴지는 거야",
+      "그대여 내 마음을 알아주오",
+      "바람이 불어오면 그대 생각이 나",
+      "그대여 다시 한번 나를 봐주오",
+      "이 밤이 지나도 우리는 이곳에",
+      "",
+      "明日への道を歩き出すよ",
+      "涙のあとには優しさが咲く",
+    ].join("\n");
+    const result = analyzeLanguages(lyrics)!;
+    expect(result.primary.code).toBe("ko");
+    expect(result.all.map(d => d.code)).toContain("ja");
+  });
+
   it("Guren no Yumiya: Japanese primary, iconic German opener does not hijack", () => {
     // The song opens with German ("Seid ihr das Essen?") but is overwhelmingly
     // Japanese — script detection pins ja and the model must not flip it.

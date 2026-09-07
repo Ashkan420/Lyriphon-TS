@@ -154,7 +154,7 @@ Bindings live in `wrangler.toml`. Prod secrets: `wrangler secret put …`.
 
 ## Translation pipeline
 
-`language-analyzer.ts` (script heuristics + tinyld with Latin/Arabic-partition projection passes → single/bilingual/multilingual; `rebaseAnalysisForTarget` drops the target language before prompt composition)
+`language-analyzer.ts` (script heuristics — highest-ratio pin — + tinyld with per-script projection passes over line partitions → single/bilingual/multilingual; `rebaseAnalysisForTarget` drops the target language before prompt composition)
 → prompts (`prompts/base` + sources + targets; `composeTranslationPrompt` applies the rebase)
 → `gemini.ts` (model chain, 429 backoff, permanent 400/401/403 bail). `translateLyrics` detects no-op echoes (script-based + whole-output when the song is not mainly in the target) and the callback retries with a NO_OP hint; `composeTranslationPrompt` appends a mixed-language directive when the target language is present in the lyrics.
 → `combine.ts` (line-aligned interleave / mismatch fallback)

@@ -92,9 +92,11 @@ const PERSIAN_MARKERS_RE = /[\u067E\u0686\u0698\u06AF\u06CC\u06A9]/;
 
 const SCRIPT_RATIO_THRESHOLD = 0.12;
 
-// Latin-projection thresholds (see mergeResults). PROJ_SIGNAL_MIN separates
-// real detections from gram-noise; PROJ_FLOOR compensates tinyld's miscalibrated
-// absolute accuracy on repetitive lyric text.
+// Projection thresholds (see mergeResults): PROJ_SIGNAL_MIN separates real
+// subset detections from gram-noise; PROJ_FLOOR compensates tinyld's
+// miscalibrated absolute accuracy on repetitive lyric text (a correct
+// repetitive English chorus scores 0.15) so a confident identification still
+// earns its subset's share.
 const PROJ_SIGNAL_MIN = 0.10;
 const PROJ_FLOOR = 0.45;
 
@@ -137,6 +139,10 @@ function detectByScript(lyrics: string): ScriptResult | null {
   const totalChars = lyrics.replace(/\s/g, "").length;
   if (totalChars === 0) return null;
 
+  // Highest ratio wins, not first past the threshold: SCRIPT_PATTERNS order
+  // is arbitrary, and first-match-wins pinned kana over a dominant Hangul
+  // majority in mixed ja/ko songs, overriding the model's preference.
+  let best: ScriptResult | null = null;
   for (const { regex, code, excludeIf } of SCRIPT_PATTERNS) {
     if (excludeIf && excludeIf.test(lyrics)) {
       continue;
@@ -144,11 +150,12 @@ function detectByScript(lyrics: string): ScriptResult | null {
     const matches = lyrics.match(new RegExp(regex.source, "g"));
     if (matches) {
       const ratio = matches.length / totalChars;
-      if (ratio >= SCRIPT_RATIO_THRESHOLD) {
-        return { code, ratio };
+      if (ratio >= SCRIPT_RATIO_THRESHOLD && (!best || ratio > best.ratio)) {
+        best = { code, ratio };
       }
     }
   }
+  if (best) return best;
 
   // Arabic block last: it never overlaps kana/Hangul/Devanagari/Cyrillic,
   // so checking it after the unambiguous scripts is safe.
@@ -183,52 +190,102 @@ function nonSpaceLength(text: string): number {
 }
 
 // A projection pass: detections over a subset of the lyrics, weighted by how
-// much of the song that subset is.
+// much of the song that subset is. partitionFired records whether any
+// non-trivial subset existed — two scripts coexisting is itself evidence of
+// bilingualism (see mergeResults' mode floor).
 interface Projection {
   scores: Map<string, number>;
   share: number;
+  partitionFired: boolean;
 }
 
+// Per-script subsets for the projection passes, as line partitions. Lines are
+// assigned to the FIRST matching script (a Latin-heavy mixed line belongs to
+// its CJK lead-in); subsets smaller than PARTITION_MIN_SHARE are skipped.
+// Latin uses a character-strip (not lines) so embedded English fragments
+// inside CJK lines are also captured. The Arabic partition splits the Arabic
+// block by Persian markers: lines WITHOUT Persian-exclusive letters (پ چ ژ گ
+// ی ک) are re-detected so an Arabic remainder surfaces next to a Persian
+// majority.
+interface ScriptPartition {
+  code: string;
+  regex: RegExp;
+  byLine: boolean;
+}
+const SCRIPT_PARTITIONS: ScriptPartition[] = [
+  { code: "ko", regex: /[가-힯]/, byLine: true },
+  { code: "ja", regex: /[぀-ヿ]/, byLine: true },
+  { code: "zh", regex: /[一-鿿]/, byLine: true },
+  { code: "ru", regex: /[Ѐ-ӿ]/, byLine: true },
+  { code: "hi", regex: /[ऀ-ॿ]/, byLine: true },
+  { code: "bn", regex: /[ঀ-৿]/, byLine: true },
+  { code: "pa", regex: /[਀-੿]/, byLine: true },
+  { code: "ta", regex: /[஀-௿]/, byLine: true },
+  { code: "te", regex: /[ఀ-౿]/, byLine: true },
+  { code: "th", regex: /[฀-๿]/, byLine: true },
+  { code: "he", regex: /[֐-׿]/, byLine: true },
+];
+const PARTITION_MIN_SHARE = 0.05;
+
 // tinyld's gram model is dominated by the script-pinned language: on a 50/50
-// Japanese + English text it returns ja:1 and drops English entirely, while
-// German inside a Japanese song still surfaces (distinctive grams). Two
-// projections recover what the full-text pass hides:
-// - Latin subset — Latin secondaries (usually English) are the most common
-//   bilingual mix.
-// - Persian/Arabic line partition — fa and ar share the Arabic block, the
-//   full-text pass only ever sees the marker-dominant side, and the script
-//   pin likewise. Lines WITHOUT Persian-exclusive letters (پ چ ژ گ ی ک) are
-//   re-detected on their own so an Arabic remainder surfaces. In a pure
-//   Persian song essentially every line carries ی/ک, so the partition is
-//   empty and nothing phantom is injected.
-// Projections are only consumed when a script pin exists (see mergeResults) —
-// otherwise they'd re-detect the same text the full pass already covered.
+// Japanese + English text it returns ja:1 and drops English entirely; a
+// Korean-dominant song with a Japanese bridge returns ko:1 and drops ja.
+// Projection passes recover what the full-text pass hides: for each script
+// subset, re-detect the subset on its own and credit the detected language
+// with the subset's share of the song. Script presence is structural evidence
+// (a Hangul line is near-certain Korean), so the share is credited directly —
+// no accuracy flooring, tinyld's absolute accuracy is miscalibrated on
+// repetitive lyric text anyway (correct French ID scores 0.52). Projections
+// are only consumed when a script pin exists (see mergeResults) — otherwise
+// they'd re-detect the same text the full pass already covered.
 function detectByModel(lyrics: string): { full: Map<string, number>; projections: Projection[] } {
   const full = new Map<string, number>();
   foldDetections(detectAll(lyrics), full);
 
   const projections: Projection[] = [];
   const totalChars = Math.max(1, nonSpaceLength(lyrics));
+  const lines = lyrics.split("\n");
 
+  // Latin: character strip, catching English fragments inside CJK lines too.
   const latinOnly = lyrics.replace(NON_LATIN_RE, " ");
   const latinShare = nonSpaceLength(latinOnly) / totalChars;
   if (latinShare < 1 && latinOnly.trim().length > 0) {
     const scores = new Map<string, number>();
     foldDetections(detectAll(latinOnly), scores);
-    projections.push({ scores, share: latinShare });
+    projections.push({ scores, share: latinShare, partitionFired: true });
   }
 
+  // Arabic block: split by Persian markers (char-level within lines).
   if (PERSIAN_MARKERS_RE.test(lyrics)) {
-    const arabicOnlyLines = lyrics
-      .split("\n")
+    const arabicOnlyLines = lines
       .filter(line => ARABIC_BLOCK_RE.test(line) && !PERSIAN_MARKERS_RE.test(line));
     const arabicOnly = arabicOnlyLines.join("\n");
     const arabicShare = nonSpaceLength(arabicOnly) / totalChars;
     if (arabicShare > 0 && arabicShare < 1) {
       const scores = new Map<string, number>();
       foldDetections(detectAll(arabicOnly), scores);
-      projections.push({ scores, share: arabicShare });
+      projections.push({ scores, share: arabicShare, partitionFired: true });
     }
+  }
+
+  // Remaining scripts: line partitions.
+  const assigned = new Set<number>();
+  for (const { code, regex, byLine } of SCRIPT_PARTITIONS) {
+    if (!byLine) continue;
+    const subsetLines: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (assigned.has(i)) continue;
+      if (regex.test(lines[i])) {
+        subsetLines.push(lines[i]);
+        assigned.add(i);
+      }
+    }
+    const subset = subsetLines.join("\n");
+    const share = nonSpaceLength(subset) / totalChars;
+    if (share < PARTITION_MIN_SHARE || share >= 1) continue;
+    const scores = new Map<string, number>();
+    foldDetections(detectAll(subset), scores);
+    projections.push({ scores, share, partitionFired: true });
   }
 
   return { full, projections };
@@ -237,7 +294,7 @@ function detectByModel(lyrics: string): { full: Map<string, number>; projections
 function mergeResults(
   script: ScriptResult | null,
   model: { full: Map<string, number>; projections: Projection[] },
-): DetectedLanguage[] {
+): { ranked: DetectedLanguage[]; partitionFired: boolean } {
   const MODEL_WEIGHT = script ? 0.4 : 1.0;
 
   const byCode = new Map<string, number>();
@@ -246,15 +303,14 @@ function mergeResults(
   }
 
   // Projection passes: credit each projection's top-1 detection (excluding
-  // the script-pinned language) proportionally to its subset's share of the
-  // song. Identification is reliable but the absolute accuracy is not
-  // proportional to text share (tinyld's own docs show a correct French ID at
-  // 0.52; a repetitive English chorus scores 0.15), so a signal that clears
-  // the noise threshold is floored at PROJ_FLOOR before scaling. Skipped
-  // entirely without a script pin — then the projections re-detected
-  // near-identical text and would double-count the full pass.
+  // the script-pinned language) with its subset's share of the song, floored
+  // at PROJ_FLOOR for the reasons above. Skipped entirely without a script
+  // pin — then the projections re-detected near-identical text and would
+  // double-count the full pass.
+  let partitionFired = false;
   if (script) {
     for (const projection of model.projections) {
+      partitionFired ||= projection.partitionFired && projection.share >= PARTITION_MIN_SHARE;
       const top = [...projection.scores.entries()]
         .filter(([code]) => code !== script.code)
         .sort((a, b) => b[1] - a[1])[0];
@@ -283,7 +339,7 @@ function mergeResults(
     }
   }
 
-  return sorted;
+  return { ranked: sorted, partitionFired };
 }
 
 function hardFilter(languages: DetectedLanguage[]): DetectedLanguage[] {
@@ -294,7 +350,7 @@ function hardFilter(languages: DetectedLanguage[]): DetectedLanguage[] {
     .slice(0, MAX_LANGS);
 }
 
-function classify(languages: DetectedLanguage[]): LanguageAnalysis {
+function classify(languages: DetectedLanguage[], partitionFired = false): LanguageAnalysis {
   const total = languages.reduce((sum, d) => sum + d.score, 0);
   const all = languages.map(d => ({
     ...d,
@@ -303,8 +359,15 @@ function classify(languages: DetectedLanguage[]): LanguageAnalysis {
 
   const meaningful = all.filter(d => d.score >= 0.10);
 
+  // Two scripts coexisting is structural bilingualism: a 20% bridge language
+  // must not collapse the mode to "single" under the primaryShare threshold,
+  // or the translator loses the bridge's hint fragment.
+  const mode = partitionFired && all.length > 1
+    ? (classifyModes(all) === "single" ? "bilingual" : classifyModes(all))
+    : classifyModes(all);
+
   return {
-    mode: classifyModes(all),
+    mode,
     primary: all[0],
     secondary: (all[1]?.score ?? 0) > 0.10 ? all[1] : undefined,
     meaningful,
@@ -318,11 +381,11 @@ export function analyzeLanguages(lyrics: string): LanguageAnalysis | undefined {
   const script = detectByScript(lyrics);
   const modelScores = detectByModel(lyrics);
 
-  const merged = mergeResults(script, modelScores);
-  const filtered = hardFilter(merged);
+  const { ranked, partitionFired } = mergeResults(script, modelScores);
+  const filtered = hardFilter(ranked);
   if (!filtered.length) return undefined;
 
-  const result = classify(filtered);
+  const result = classify(filtered, partitionFired);
   debug("analyzeLanguages", {
     chars: lyrics.length,
     script: script ? `${script.code}:${script.ratio.toFixed(2)}` : null,
