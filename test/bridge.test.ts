@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleBridgeUpdate, isBridgeChat, parseBridgeMessage } from "../src/handlers/bridge";
+import { handleBridgeUpdate, isBridgeChat, parseBridgeMessage, clearPendingSendPrompts } from "../src/handlers/bridge";
 import { Env } from "../src/env";
 import { AudioRequestRow } from "../src/db/audioRequests";
 
@@ -406,12 +406,104 @@ describe("handleBridgeUpdate", () => {
     const promptCall = sendMessage.mock.calls.find((c: any[]) => c[1] === "Send to which channel?");
     expect(promptCall).toBeDefined();
     expect(JSON.stringify(promptCall?.[2])).toContain("send_channel_-100123");
-    // pending-send stash written for the user
+    // pending-send stash written for the user, with the prompt tracked for
+    // later cleanup (chat 555, message 9)
     const stash = kv.get("bridge_pending_send:user-1");
     expect(stash).toBeDefined();
     const parsed = JSON.parse(stash!);
     expect(parsed.fileId).toBe("forwarded-file-id");
     expect(parsed.telegraphUrl).toBe("https://telegra.ph/abc");
+    expect(parsed.prompts).toEqual([{ chatId: 555, messageId: 9 }]);
+  });
+
+  it("carries tracked prompts forward when a second delivery overwrites the stash", async () => {
+    const sendAudio = vi.fn(async (..._args: any[]) => {});
+    const sendMessage = vi.fn(async (..._args: any[]) => ({ message_id: 10 }));
+    apiMethods.sendAudio = sendAudio;
+    apiMethods.sendMessage = sendMessage;
+    const kv = new Map<string, string>();
+    const db = fakeD1WithKv(row(), kv, { channels: [{ channel_id: "-100123", title: "My Channel" }] });
+
+    // First delivery tracks message 9 (from the stash test's shape); seed it
+    // directly, then let a second delivery overwrite the stash.
+    kv.set("bridge_pending_send:user-1", JSON.stringify({
+      fileId: "old-file", caption: "old", telegraphUrl: null,
+      prompts: [{ chatId: 555, messageId: 9 }], ts: Date.now(),
+    }));
+
+    await handleBridgeUpdate(makeEnv(db), bridgeUpdate({
+      caption: undefined,
+      audio: undefined,
+      text: `lyq:file req=${TOKEN}`,
+      reply_to_message: { audio: { file_id: "forwarded-file-id-2" } },
+    }));
+
+    const parsed = JSON.parse(kv.get("bridge_pending_send:user-1")!);
+    expect(parsed.fileId).toBe("forwarded-file-id-2");
+    // Old prompt survives the overwrite so it can still be cleaned up.
+    expect(parsed.prompts).toEqual([{ chatId: 555, messageId: 9 }, { chatId: 555, messageId: 10 }]);
+  });
+
+  it("clearPendingSendPrompts deletes tracked prompts and empties the stash list", async () => {
+    const deleteMessage = vi.fn(async (..._args: any[]) => ({}));
+    apiMethods.deleteMessage = deleteMessage;
+    const kv = new Map<string, string>();
+    const db = fakeD1WithKv(row(), kv);
+
+    kv.set("bridge_pending_send:user-1", JSON.stringify({
+      fileId: "f", caption: "c", telegraphUrl: null,
+      prompts: [
+        { chatId: 555, messageId: 9 },
+        { chatId: 555, messageId: 12 },
+      ],
+      ts: Date.now(),
+    }));
+
+    await clearPendingSendPrompts(apiMethods as any, makeEnv(db), "user-1");
+
+    expect(deleteMessage.mock.calls).toEqual([[555, 9], [555, 12]]);
+    const parsed = JSON.parse(kv.get("bridge_pending_send:user-1")!);
+    expect(parsed.prompts).toEqual([]);
+    // Audio context survives for a later send_channel_ click.
+    expect(parsed.fileId).toBe("f");
+  });
+
+  it("clearPendingSendPrompts wipes an expired stash instead of emptying its prompts", async () => {
+    const deleteMessage = vi.fn(async (..._args: any[]) => ({}));
+    apiMethods.deleteMessage = deleteMessage;
+    const kv = new Map<string, string>();
+    const db = fakeD1WithKv(row(), kv);
+
+    kv.set("bridge_pending_send:user-1", JSON.stringify({
+      fileId: "f", caption: "c", telegraphUrl: null,
+      prompts: [{ chatId: 555, messageId: 9 }],
+      ts: Date.now() - 3600_000 - 5_000,
+    }));
+
+    await clearPendingSendPrompts(apiMethods as any, makeEnv(db), "user-1");
+
+    expect(deleteMessage).toHaveBeenCalledWith(555, 9);
+    // Expired stash must not be revived with cleared prompts.
+    expect(kv.get("bridge_pending_send:user-1")).toBe("");
+  });
+
+  it("clearPendingSendPrompts tolerates a stale deleted prompt", async () => {
+    const deleteMessage = vi.fn(async (..._args: any[]) => {
+      throw new Error("message to delete not found");
+    });
+    apiMethods.deleteMessage = deleteMessage;
+    const kv = new Map<string, string>();
+    const db = fakeD1WithKv(row(), kv);
+
+    kv.set("bridge_pending_send:user-1", JSON.stringify({
+      fileId: "f", caption: "c", telegraphUrl: null,
+      prompts: [{ chatId: 555, messageId: 9 }],
+      ts: Date.now(),
+    }));
+
+    // Must resolve without throwing and still clear the list.
+    await clearPendingSendPrompts(apiMethods as any, makeEnv(db), "user-1");
+    expect(JSON.parse(kv.get("bridge_pending_send:user-1")!).prompts).toEqual([]);
   });
 
   it("deletes the queued notice on failure", async () => {

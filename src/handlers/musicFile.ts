@@ -5,6 +5,7 @@ import { SessionData, SessionMode } from "../session/types";
 import { clearAudioState } from "../session/flows";
 import { inMode, transition } from "../session/transitions";
 import { searchAndShowResults, clearSendChannelPrompt } from "../utils/telegram";
+import { clearPendingSendPrompts } from "./bridge";
 import { log } from "../utils/logger";
 import { buildTrackButtons } from "./songSearch";
 import { hasTrackFile } from "../db/tracks";
@@ -22,6 +23,9 @@ export async function handleMusicFile(ctx: Context, session: SessionData, env: E
   }
 
   await clearSendChannelPrompt(ctx.api, chatId, session);
+  // Bridge prompts live outside the session (session-free delivery) — clean
+  // them from the D1 stash too.
+  await clearPendingSendPrompts(ctx.api, env, String(ctx.from?.id ?? ""));
 
   const titleCandidate = message.audio?.title;
   const artistCandidate = message.audio?.performer;

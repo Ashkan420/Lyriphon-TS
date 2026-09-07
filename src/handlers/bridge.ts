@@ -268,14 +268,38 @@ async function deleteQueuedMsg(env: Env, row: AudioRequestRow): Promise<void> {
 // about bridge deliveries, but send_channel_ clicks need the audio context.
 // handleSendToChannelCallback falls back to this when session fields are
 // empty (bridge/README parity: one pending send per user, 1 h freshness).
-type PendingSend = { fileId: string; caption: string; telegraphUrl: string | null; ts: number };
+// `prompts` tracks the "Send to which channel?" prompts this stash sent so a
+// later search can delete them — bridge prompts have no session, so without
+// this they would linger in the DM forever. Array (capped) because
+// back-to-back deliveries overwrite the stash; a single field would orphan
+// all but the newest prompt.
+type PendingSendPrompt = { chatId: number; messageId: number };
+type PendingSend = { fileId: string; caption: string; telegraphUrl: string | null; prompts?: PendingSendPrompt[]; ts: number };
+
+const PENDING_SEND_MAX_PROMPTS = 5;
+const PENDING_SEND_FRESH_MS = 3600_000;
+
+function parsePendingSend(raw: string | null): PendingSend | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as PendingSend;
+    if (!parsed.fileId || !parsed.caption) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 async function stashPendingSend(env: Env, row: AudioRequestRow, fileId: string, caption: string): Promise<void> {
   try {
+    // Carry forward any prompts tracked by an earlier stash — the audio
+    // context is overwritten, but its channel prompts still need cleanup.
+    const previous = parsePendingSend(await getSetting(env.DB, `${PENDING_SEND_PREFIX}${row.user_id}`));
+    const prompts = (previous?.prompts ?? []).slice(-PENDING_SEND_MAX_PROMPTS);
     await setSetting(
       env.DB,
       `${PENDING_SEND_PREFIX}${row.user_id}`,
-      JSON.stringify({ fileId, caption, telegraphUrl: row.telegraph_url, ts: Date.now() } satisfies PendingSend),
+      JSON.stringify({ fileId, caption, telegraphUrl: row.telegraph_url, prompts, ts: Date.now() } satisfies PendingSend),
     );
   } catch (error) {
     warn("bridge: failed to stash pending send", error);
@@ -288,7 +312,7 @@ export async function takePendingSend(env: Env, userId: string): Promise<Pending
     const raw = await getSetting(env.DB, key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PendingSend;
-    if (!parsed.fileId || !parsed.caption || Date.now() - parsed.ts > 3600_000) {
+    if (!parsed.fileId || !parsed.caption || Date.now() - parsed.ts > PENDING_SEND_FRESH_MS) {
       await setSetting(env.DB, key, "");
       return null;
     }
@@ -296,6 +320,51 @@ export async function takePendingSend(env: Env, userId: string): Promise<Pending
   } catch (error) {
     warn("bridge: failed to read pending send", error);
     return null;
+  }
+}
+
+// Record a channel prompt so clearPendingSendPrompts can delete it later.
+// Read-modify-write; a no-op when the stash is gone (a send_channel_ click
+// between prompt send and this write already wiped it — its ✅ edit handled
+// that prompt). Failures never break delivery.
+async function trackPendingSendPrompt(env: Env, userId: string, prompt: PendingSendPrompt): Promise<void> {
+  try {
+    const key = `${PENDING_SEND_PREFIX}${userId}`;
+    const stash = parsePendingSend(await getSetting(env.DB, key));
+    if (!stash) return;
+    const prompts = [...(stash.prompts ?? []), prompt].slice(-PENDING_SEND_MAX_PROMPTS);
+    await setSetting(env.DB, key, JSON.stringify({ ...stash, prompts } satisfies PendingSend));
+  } catch (error) {
+    warn("bridge: failed to track channel prompt", error);
+  }
+}
+
+// Delete channel prompts this user's bridge deliveries left behind. Called
+// when a new search starts — the exact moment the old prompt becomes stale.
+// Fresh stash keeps its audio context (prompts emptied); expired stash is
+// wiped whole (same invalidation as takePendingSend — don't revive it).
+export async function clearPendingSendPrompts(bot: Api<RawApi>, env: Env, userId: string): Promise<void> {
+  try {
+    const key = `${PENDING_SEND_PREFIX}${userId}`;
+    const raw = await getSetting(env.DB, key);
+    if (!raw) return;
+    const stash = JSON.parse(raw) as PendingSend;
+    const prompts = stash.prompts ?? [];
+    for (const p of prompts) {
+      try {
+        await bot.deleteMessage(p.chatId, p.messageId);
+      } catch {
+        // already deleted / stale — nothing to clean up
+      }
+    }
+    if (!prompts.length) return;
+    if (!stash.fileId || !stash.caption || Date.now() - stash.ts > PENDING_SEND_FRESH_MS) {
+      await setSetting(env.DB, key, "");
+    } else {
+      await setSetting(env.DB, key, JSON.stringify({ ...stash, prompts: [] } satisfies PendingSend));
+    }
+  } catch (error) {
+    warn("bridge: failed to clear channel prompts", error);
   }
 }
 
@@ -308,6 +377,8 @@ export async function clearPendingSend(env: Env, userId: string): Promise<void> 
 }
 
 // Mirror of attachAudioAndPromptChannel's prompt, for session-free delivery.
+// The prompt id is tracked in the pending-send stash (session fields are
+// unreachable here) so a later search can delete a stale prompt.
 async function promptChannelSend(env: Env, row: AudioRequestRow): Promise<void> {
   try {
     const channels = await getUserChannels(env.DB, row.user_id);
@@ -316,9 +387,10 @@ async function promptChannelSend(env: Env, row: AudioRequestRow): Promise<void> 
     const channelButtons = channels.map((ch) => [
       { text: ch.title ?? ch.channel_id, callback_data: `send_channel_${ch.channel_id}` },
     ]);
-    await api.sendMessage(row.chat_id, "Send to which channel?", {
+    const prompt = await api.sendMessage(row.chat_id, "Send to which channel?", {
       reply_markup: { inline_keyboard: channelButtons },
     });
+    await trackPendingSendPrompt(env, row.user_id, { chatId: row.chat_id, messageId: prompt.message_id });
   } catch (error) {
     warn("bridge: failed to prompt channel send", error);
   }

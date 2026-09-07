@@ -7,6 +7,7 @@ import { SessionData, SessionMode } from "../session/types";
 import { clearAudioState } from "../session/flows";
 import { inMode } from "../session/transitions";
 import { searchAndShowResults, safeAnswer, formatDuration, clearSendChannelPrompt } from "../utils/telegram";
+import { clearPendingSendPrompts } from "./bridge";
 import { log } from "../utils/logger";
 
 const PAGE_SIZE = 5;
@@ -70,6 +71,9 @@ export async function runSongSearch(ctx: Context, session: SessionData, env: Env
   clearAudioState(session);
 
   await clearSendChannelPrompt(ctx.api, chatId, session);
+  // Bridge prompts live outside the session (session-free delivery) — clean
+  // them from the D1 stash too.
+  await clearPendingSendPrompts(ctx.api, env, String(ctx.from?.id ?? ""));
 
   const query = rawQuery?.trim();
   if (!query) {
