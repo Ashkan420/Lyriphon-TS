@@ -1,5 +1,5 @@
-import { createSessionData, resetSessionData, clearAudioState, resetFlow as resetFlowData, snapshotSession } from "./flows";
-import { AudioFlowData, EditFlowData, LyricsFlowData, SearchFlowData, TelegraphFlowData, SessionData, SessionMode } from "./types";
+import { createSessionData, resetSessionData, clearAudioState, dbBrowserOf, resetFlow as resetFlowData, snapshotSession } from "./flows";
+import { AudioFlowData, DbBrowserState, EditFlowData, LyricsFlowData, SearchFlowData, TelegraphFlowData, SessionData, SessionMode } from "./types";
 import { captureVersion, inMode, isStale } from "./transitions";
 
 export function createSession(): SessionData {
@@ -20,6 +20,11 @@ export function resetSessionDataEntry(session: SessionData) {
 
 export function clearAudioStateEntry(session: SessionData) {
   clearAudioState(session);
+}
+
+// Lazily materialize the owner DB browser state (persisted sessions predate it).
+export function dbBrowser(session: SessionData): DbBrowserState {
+  return dbBrowserOf(session);
 }
 
 export function resetFlow(flow: AudioFlowData | SearchFlowData | EditFlowData | LyricsFlowData | TelegraphFlowData) {

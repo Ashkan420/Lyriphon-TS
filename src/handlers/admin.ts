@@ -6,6 +6,7 @@ import { formatLogPage, warn } from "../utils/logger";
 import { safeAnswer } from "../utils/telegram";
 import { isAutoFetchEnabled, setAutoFetchEnabled } from "../db/settings";
 import { buildLogsNavRow } from "./callbacks/logs";
+import { openBrowserHomeFromAdmin } from "./dbAdmin";
 
 // Telegram button `style` is newer than some @grammyjs/types pins; match
 // the loose shape used by /logs and edit menus.
@@ -72,6 +73,9 @@ export function buildAdminKeyboard(
   if (debugOn) {
     rows.push([{ text: "📋 Logs", callback_data: "admin_logs" }]);
   }
+
+  // Always visible: the owner's DB browser entry point.
+  rows.push([{ text: "🗄 Track cache", callback_data: "admin_db" }]);
 
   return rows;
 }
@@ -206,6 +210,11 @@ export async function handleAdminCallback(
       return;
     }
     await renderAdminLogs(ctx, 0);
+    return;
+  }
+
+  if (data === "admin_db") {
+    await openBrowserHomeFromAdmin(ctx, session, env);
     return;
   }
 

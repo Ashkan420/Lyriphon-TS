@@ -10,10 +10,11 @@ import { getSession } from "./session/index";
 import { SessionMode } from "./session/types";
 import { inMode } from "./session/transitions";
 import { safeDelete, cancelEdit } from "./utils/telegram";
-import { clearAudioState } from "./session/flows";
+import { clearAudioState, dbBrowserOf, resetDbBrowserInput } from "./session/flows";
 import { warn, formatLogPage } from "./utils/logger";
 import { buildLogsKeyboard } from "./handlers/callbacks/logs";
 import { adminCommand, handleAdminCallback, isBotOwner } from "./handlers/admin";
+import { dbCommand, handleDbViewCallback, handleDbTextInput } from "./handlers/dbAdmin";
 import { handleSettingsCommand } from "./handlers/settings";
 
 export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
@@ -59,6 +60,17 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
 
+    const db = dbBrowserOf(session);
+    if (db.collectingLyrics || db.awaitingQuery) {
+      // Cancel the owner DB browser's pending input (lyrics messages were
+      // already deleted as they arrived; just drop the state).
+      const wasCollecting = db.collectingLyrics;
+      resetDbBrowserInput(db);
+      await safeDelete(ctx.api, chatId, ctx.message!.message_id);
+      await ctx.reply(wasCollecting ? "❌ Lyrics entry cancelled" : "❌ Search cancelled");
+      return;
+    }
+
     if (inMode(session, SessionMode.EDIT_FIELD) || inMode(session, SessionMode.EDIT_LYRICS)) {
       await safeDelete(ctx.api, chatId, ctx.message!.message_id);
       await cancelEdit(ctx.api, chatId, session);
@@ -84,6 +96,11 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     }
     const session = getSession(sessionDo.sessionData);
     await adminCommand(ctx, session, sessionDo, env);
+  });
+
+  bot.command("db", async (ctx) => {
+    const session = getSession(sessionDo.sessionData);
+    await dbCommand(ctx, session, env);
   });
 
   bot.command("debug", async (ctx) => {
@@ -251,6 +268,12 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
 
   bot.on("message:text", async (ctx) => {
     const session = getSession(sessionDo.sessionData);
+    // Owner DB browser takes priority: it must never leak into the edit flows
+    // or a /song search. Returns true only when it consumed the input.
+    if (await handleDbTextInput(ctx, session, env)) {
+      return;
+    }
+
     if (session.mode === SessionMode.EDIT_FIELD || session.mode === SessionMode.EDIT_LYRICS) {
       await processTextMessage(ctx, session, env);
       return;
@@ -287,6 +310,11 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
 
     if (data.startsWith("admin_")) {
       await handleAdminCallback(ctx, session, sessionDo, env);
+      return;
+    }
+
+    if (data.startsWith("dbview_")) {
+      await handleDbViewCallback(ctx, session, env);
       return;
     }
 

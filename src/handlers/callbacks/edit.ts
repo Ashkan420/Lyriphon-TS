@@ -7,6 +7,9 @@ import { resetFlow, SessionMode, captureVersion, isStale } from "../../session/i
 import { SessionData } from "../../session/types";
 import { Env } from "../../env";
 import { analyzeLanguages } from "../../services/translation/language-analyzer";
+import { setTrackLyrics } from "../../db/tracks";
+import { isBotOwner } from "../admin";
+import { warn } from "../../utils/logger";
 import {
   urlFields,
   chatId,
@@ -225,6 +228,76 @@ async function finalizeLyrics(ctx: Context, session: SessionData, env: Env): Pro
   resetFlow(session.lyrics);
   resetFlow(session.edit);
 
-  await safeEditMessage(ctx, "✅ Lyrics Updated");
+  // Owner gets a one-click cache sync: manual fixes on the Telegraph page
+  // would otherwise leave the D1 lyrics cache stale for everyone else.
+  const trackId = (lastData as any)?.trackId;
+  if (isBotOwner(ctx, env) && typeof trackId === "number" && fullLyrics) {
+    try {
+      await ctx.editMessageText("✅ Lyrics Updated", {
+        reply_markup: { inline_keyboard: buildApplyD1Keyboard(trackId) },
+      });
+    } catch {
+      // edit races — the owner still has the result card with the menu.
+    }
+  } else {
+    await safeEditMessage(ctx, "✅ Lyrics Updated");
+  }
   return true;
+}
+
+// Keyboard for the post-edit "Apply to D1" offer (owner-only, appended after
+// a successful lyrics finalize). Pure so tests can pin the callback shape.
+export function buildApplyD1Keyboard(trackId: number) {
+  return [
+    [{ text: "💾 Apply to D1", callback_data: `applyd1_${trackId}`, style: "success" as const }],
+  ];
+}
+
+// Overwrite the cached lyrics for this track with what the Telegraph page
+// now shows. The session-track guard keeps a stale card from writing one
+// song's lyrics into another track's cache row.
+export async function handleApplyToD1(ctx: Context, session: SessionData, env: Env): Promise<void> {
+  if (!isBotOwner(ctx, env)) {
+    return;
+  }
+
+  const data = ctx.callbackQuery?.data ?? "";
+  // The spent button's token — nothing to do beyond acknowledging.
+  if (data === "applyd1_done") {
+    await safeAnswer(ctx);
+    return;
+  }
+
+  const trackId = Number(data.replace("applyd1_", ""));
+  const lastData = session.telegraph.data as { trackId?: number } | undefined;
+  const lyrics = session.telegraph.originalLyrics;
+
+  if (
+    Number.isNaN(trackId)
+    || lastData?.trackId !== trackId
+    || !lyrics
+  ) {
+    await ctx.answerCallbackQuery({
+      text: "Session moved on — edit the lyrics again, then apply.",
+      show_alert: true,
+    } as any).catch(() => {});
+    return;
+  }
+
+  try {
+    await setTrackLyrics(env.DB, trackId, lyrics);
+  } catch (error) {
+    warn("applyd1: failed to write cached lyrics", error);
+    await ctx.answerCallbackQuery({ text: "❌ Database error", show_alert: true } as any).catch(() => {});
+    return;
+  }
+
+  await ctx.answerCallbackQuery({ text: "✅ Cached lyrics updated" }).catch(() => {});
+  try {
+    await ctx.editMessageReplyMarkup({
+      reply_markup: {
+        inline_keyboard: [[{ text: "✅ Applied to D1", callback_data: "applyd1_done", style: "success" as const }]],
+      } as any,
+    });
+  } catch {}
 }

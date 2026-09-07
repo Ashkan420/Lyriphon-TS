@@ -43,6 +43,46 @@ export interface TranslationCacheEntry {
   text: string;
 }
 
+// Owner-only DB browser state. Deliberately NOT a SessionMode: it must not
+// clobber an active edit/search flow, and handlers must be safe to enter from
+// any mode. Persisted sessions predate this field — always reach it through
+// dbBrowserOf() (session/flows.ts), never session.dbBrowser directly.
+export interface LyricsCandidate {
+  trackName: string;
+  artistName: string;
+  albumName: string;
+  source: "plain" | "synced";
+  lyrics: string;
+}
+
+export interface DbBrowserState extends BaseFlowData {
+  // Text input the browser currently waits for: a search query or lyrics
+  // for the manual-set flow. Consumed on first use.
+  awaitingQuery?: boolean;
+  awaitingCustomSearch?: boolean;
+  collectingLyrics?: boolean;
+  query?: string;
+  page?: number;
+  trackId?: number;
+  // List browse filter (Recent = all, Missing lyrics = rows with NULL lyrics).
+  listFilter?: "all" | "missing";
+  // Album filter for the LRCLIB re-fetch search (toggled per record).
+  albumMode?: boolean;
+  // Free-text LRCLIB search context (q= mode; no album filter).
+  customQuery?: string;
+  candidates?: LyricsCandidate[];
+  // Lyrics being collected via DM messages (manual set), mirror of the
+  // edit flow's lyrics buffer.
+  buffer: string[];
+  messageIds: number[];
+  promptId?: number;
+  // Home screen's Back row: admin panel vs /db entry (Close).
+  fromAdmin?: boolean;
+  // Entered via a Telegraph card's 🛠 Cache tools button: Back closes the
+  // tools message instead of navigating a list.
+  fromCard?: boolean;
+}
+
 export interface TelegraphFlowData extends BaseFlowData {
   url?: string;
   path?: string;
@@ -74,6 +114,7 @@ export interface SessionData {
   edit: EditFlowData;
   lyrics: LyricsFlowData;
   telegraph: TelegraphFlowData;
+  dbBrowser: DbBrowserState;
 }
 
 export interface SessionSnapshot {
@@ -84,4 +125,5 @@ export interface SessionSnapshot {
   edit: Record<string, unknown>;
   lyrics: Record<string, unknown>;
   telegraph: Record<string, unknown>;
+  dbBrowser: Record<string, unknown>;
 }

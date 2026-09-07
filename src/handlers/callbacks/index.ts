@@ -5,6 +5,7 @@ import { combineLyricsWithTranslation, combineLyricsFromJson, parseTranslationJs
 import { warn } from "../../utils/logger";
 import { SessionData } from "../../session/types";
 import { Env } from "../../env";
+import { isBotOwner } from "../admin";
 
 export const urlFields = ["track_link", "artist_link", "album_link", "cover"];
 
@@ -87,8 +88,24 @@ export function getDisplayLyrics(session: SessionData): string | null {
   return combineLyricsWithTranslation(originalLyrics, entry.text)?.combined ?? null;
 }
 
-export function buildEditMenu(expanded = false) {
+// Owner flag for buildEditMenu's Cache-tools row; needs the env, so it's
+// resolved at the call sites that have one (and omitted where they don't).
+export function adminToolsOpts(trackId: unknown, isOwner: boolean): { adminTools: boolean; trackId?: number } {
+  const id = typeof trackId === "number" ? trackId : undefined;
+  return { adminTools: isOwner && id !== undefined, trackId: id };
+}
+
+export function buildEditMenu(
+  expanded = false,
+  opts?: { adminTools?: boolean; trackId?: number },
+): Array<Array<{ text: string; callback_data: string; style?: "success" | "danger" | "primary" }>> {
   const refreshButton = { text: "🔄 Refresh AI Summary", callback_data: "refresh_summary" };
+  // Owner-only: opens the DB record tools for this track in a separate
+  // message (the card itself stays untouched).
+  const adminToolsRow =
+    opts?.adminTools && typeof opts.trackId === "number"
+      ? [[{ text: "🛠 Cache tools", callback_data: `dbview_card_${opts.trackId}` }]]
+      : [];
 
   if (!expanded) {
     return [
@@ -97,6 +114,7 @@ export function buildEditMenu(expanded = false) {
         { text: "🌐 Translate Lyrics", callback_data: "translate:open" },
         refreshButton,
       ],
+      ...adminToolsRow,
     ];
   }
 
@@ -125,14 +143,17 @@ export function buildEditMenu(expanded = false) {
       { text: "🌐 Translate Lyrics", callback_data: "translate:open" },
       refreshButton,
     ],
+    ...adminToolsRow,
   ];
 }
 
-export async function handleExpandEditMenu(ctx: Context) {
+export async function handleExpandEditMenu(ctx: Context, session?: SessionData, env?: Env) {
   await safeAnswer(ctx);
+  const trackId = (session?.telegraph.data as { trackId?: number } | undefined)?.trackId;
+  const isOwner = env ? isBotOwner(ctx, env) : false;
   try {
     await ctx.editMessageReplyMarkup({
-      reply_markup: { inline_keyboard: buildEditMenu(true) },
+      reply_markup: { inline_keyboard: buildEditMenu(true, adminToolsOpts(trackId, isOwner)) },
     });
   } catch {}
 }

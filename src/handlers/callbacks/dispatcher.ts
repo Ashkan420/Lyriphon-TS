@@ -10,6 +10,7 @@ import {
   handleCancelEditCallback,
   handleDoneLyricsCallback,
   handleNewFieldValue,
+  handleApplyToD1,
 } from "./edit";
 import { handleExpandEditMenu } from "./index";
 import { handleTranslateCallback } from "./translate";
@@ -57,6 +58,11 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
     return;
   }
 
+  if (data.startsWith("applyd1_")) {
+    await handleApplyToD1(ctx, session, env);
+    return;
+  }
+
   if (data.startsWith("send_channel_")) {
     await handleSendToChannelCallback(ctx, session, env);
     return;
@@ -88,7 +94,7 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
   }
 
   if (data === "expand_edit_menu") {
-    await handleExpandEditMenu(ctx);
+    await handleExpandEditMenu(ctx, session, env);
     return;
   }
 }

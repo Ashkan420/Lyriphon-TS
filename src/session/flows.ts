@@ -1,4 +1,4 @@
-import { AudioFlowData, EditFlowData, LyricsFlowData, SearchFlowData, SessionData, SessionMode, TelegraphFlowData } from "./types";
+import { AudioFlowData, DbBrowserState, EditFlowData, LyricsFlowData, SearchFlowData, SessionData, SessionMode, TelegraphFlowData } from "./types";
 
 export function createAudioFlow(): AudioFlowData {
   return {
@@ -40,6 +40,44 @@ export function createLyricsFlow(): LyricsFlowData {
   };
 }
 
+export function createDbBrowserState(): DbBrowserState {
+  return {
+    locked: false,
+    awaitingQuery: undefined,
+    collectingLyrics: undefined,
+    query: undefined,
+    page: undefined,
+    trackId: undefined,
+    albumMode: undefined,
+    candidates: undefined,
+    buffer: [],
+    messageIds: [],
+    promptId: undefined,
+  };
+}
+
+// Persisted sessions predate dbBrowser — lazily materialize it so handlers
+// never touch undefined. This is the ONLY sanctioned access path.
+export function dbBrowserOf(session: SessionData): DbBrowserState {
+  if (!session.dbBrowser) {
+    session.dbBrowser = createDbBrowserState();
+  }
+  return session.dbBrowser;
+}
+
+// Clear transient browser state; keeps whatever list/record context the
+// browser is in so Back navigation keeps working.
+export function resetDbBrowserInput(db: DbBrowserState) {
+  db.awaitingQuery = undefined;
+  db.awaitingCustomSearch = undefined;
+  db.collectingLyrics = undefined;
+  db.buffer = [];
+  db.messageIds = [];
+  db.promptId = undefined;
+  db.candidates = undefined;
+  db.customQuery = undefined;
+}
+
 export function createTelegraphFlow(): TelegraphFlowData {
   return {
     locked: false,
@@ -69,6 +107,7 @@ export function createSessionData(): SessionData {
     edit: createEditFlow(),
     lyrics: createLyricsFlow(),
     telegraph: createTelegraphFlow(),
+    dbBrowser: createDbBrowserState(),
   };
 }
 
@@ -80,6 +119,7 @@ export function resetSessionData(session: SessionData) {
   session.edit = createEditFlow();
   session.lyrics = createLyricsFlow();
   session.telegraph = createTelegraphFlow();
+  session.dbBrowser = createDbBrowserState();
 }
 
 export function clearAudioState(session: SessionData) {
@@ -151,5 +191,6 @@ export function snapshotSession(session: SessionData) {
     edit: { ...session.edit },
     lyrics: { ...session.lyrics },
     telegraph: { ...session.telegraph },
+    dbBrowser: { ...session.dbBrowser },
   };
 }

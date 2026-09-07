@@ -19,7 +19,8 @@ import { clearAudioState } from "../../session/flows";
 import { SessionData } from "../../session/types";
 import { Env } from "../../env";
 import { analyzeLanguages } from "../../services/translation/language-analyzer";
-import { buildEditMenu, resetTranslationState } from "./index";
+import { buildEditMenu, resetTranslationState, adminToolsOpts } from "./index";
+import { isBotOwner } from "../admin";
 import { MESSAGE_EFFECT_CONFETTI, AUTOFETCH_MAX_PENDING_PER_USER } from "../../config";
 import { isAutoFetchEnabled, isUserAutoFetchEnabled, getUserLinkPreviewEnabled } from "../../db/settings";
 import {
@@ -255,12 +256,14 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
 
   // One message from selection to result: the final card is an edit of the
   // progress message. False → no edit target; fall back to the send chain.
-  const finalized = await progress.finalizeText(replyText, { inline_keyboard: buildEditMenu() }, !showPreviews);
+  const menuOpts = adminToolsOpts(trackId, isBotOwner(ctx, env));
+  const cardMenu = buildEditMenu(false, menuOpts);
+  const finalized = await progress.finalizeText(replyText, { inline_keyboard: cardMenu }, !showPreviews);
   if (!finalized) {
     try {
       await ctx.api.sendMessage(chatId, replyText, {
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: buildEditMenu() },
+        reply_markup: { inline_keyboard: cardMenu },
         message_effect_id: MESSAGE_EFFECT_CONFETTI,
         link_preview_options: { is_disabled: !showPreviews },
       });
@@ -273,7 +276,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
       try {
         await ctx.api.sendMessage(chatId, replyText, {
           parse_mode: "HTML",
-          reply_markup: { inline_keyboard: buildEditMenu() },
+          reply_markup: { inline_keyboard: cardMenu },
           link_preview_options: { is_disabled: !showPreviews },
         });
         const messageId = progress.activeMessageId;
@@ -284,7 +287,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
         try {
           await ctx.editMessageText(replyText, {
             parse_mode: "HTML",
-            reply_markup: { inline_keyboard: buildEditMenu() },
+            reply_markup: { inline_keyboard: cardMenu },
             link_preview_options: { is_disabled: !showPreviews },
           });
         } catch (editError) {

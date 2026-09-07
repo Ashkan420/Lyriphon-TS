@@ -36,6 +36,146 @@ function syncedToPlain(syncedLyrics: string): string | null {
   return stripped.trim() ? stripped : null;
 }
 
+export type LyricsCandidate = {
+  trackName: string;
+  artistName: string;
+  albumName: string;
+  source: "plain" | "synced";
+  lyrics: string;
+};
+
+// Map a raw LRCLIB result to a usable candidate: prefer plain lyrics, strip
+// synced-LRC timestamps otherwise, drop anything with no readable text.
+export function toLyricsCandidate(raw: LrcLibTrack): LyricsCandidate | null {
+  if (raw.plainLyrics && raw.plainLyrics.trim()) {
+    return {
+      trackName: raw.trackName ?? "Unknown Track",
+      artistName: raw.artistName ?? "Unknown Artist",
+      albumName: raw.albumName ?? "",
+      source: "plain",
+      lyrics: normalizeLyrics(raw.plainLyrics),
+    };
+  }
+  if (raw.syncedLyrics && raw.syncedLyrics.trim()) {
+    const plain = syncedToPlain(raw.syncedLyrics);
+    if (plain) {
+      return {
+        trackName: raw.trackName ?? "Unknown Track",
+        artistName: raw.artistName ?? "Unknown Artist",
+        albumName: raw.albumName ?? "",
+        source: "synced",
+        lyrics: normalizeLyrics(plain),
+      };
+    }
+  }
+  return null;
+}
+
+// All usable candidates for a track/artist (optionally album-scoped) in
+// LRCLIB's relevance order — powers the admin re-fetch result picker.
+export async function searchLyricsCandidates(
+  track: string,
+  artist: string,
+  album?: string,
+  limit = 10,
+): Promise<LyricsCandidate[]> {
+  const url = new URL(LRCLIB_SEARCH);
+  url.searchParams.set("track_name", track);
+  url.searchParams.set("artist_name", artist);
+  if (album?.trim()) {
+    url.searchParams.set("album_name", album);
+  }
+
+  const response = await fetchWithTimeout(url.toString(), {
+    headers: LRCLIB_HEADERS,
+    timeoutMs: LRCLIB_TIMEOUT_MS,
+  });
+
+  if (response.status === 429) {
+    const retryAfter = response.headers.get("Retry-After");
+    const waitSeconds = retryAfter ? parseInt(retryAfter, 10) : 5;
+
+    warn(`LRCLIB rate limited, waiting ${waitSeconds}s`);
+
+    await new Promise(resolve =>
+      setTimeout(resolve, waitSeconds * 1000),
+    );
+
+    throw new Error(`LRCLIB rate limited, waited ${waitSeconds}s`);
+  }
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const results = (await response.json()) as LrcLibTrack[];
+  if (!Array.isArray(results)) {
+    return [];
+  }
+
+  const candidates: LyricsCandidate[] = [];
+  for (const raw of results) {
+    const candidate = toLyricsCandidate(raw);
+    if (candidate) {
+      candidates.push(candidate);
+      if (candidates.length >= limit) {
+        break;
+      }
+    }
+  }
+  return candidates;
+}
+
+// Free-text LRCLIB search (the `q=` parameter) — powers the admin's custom
+// lyric search where track/artist aren't known in advance. Album filter
+// doesn't apply to this mode.
+export async function searchLyricsCandidatesQuery(
+  q: string,
+  limit = 10,
+): Promise<LyricsCandidate[]> {
+  const url = new URL(LRCLIB_SEARCH);
+  url.searchParams.set("q", q);
+
+  const response = await fetchWithTimeout(url.toString(), {
+    headers: LRCLIB_HEADERS,
+    timeoutMs: LRCLIB_TIMEOUT_MS,
+  });
+
+  if (response.status === 429) {
+    const retryAfter = response.headers.get("Retry-After");
+    const waitSeconds = retryAfter ? parseInt(retryAfter, 10) : 5;
+
+    warn(`LRCLIB rate limited, waiting ${waitSeconds}s`);
+
+    await new Promise(resolve =>
+      setTimeout(resolve, waitSeconds * 1000),
+    );
+
+    throw new Error(`LRCLIB rate limited, waited ${waitSeconds}s`);
+  }
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const results = (await response.json()) as LrcLibTrack[];
+  if (!Array.isArray(results)) {
+    return [];
+  }
+
+  const candidates: LyricsCandidate[] = [];
+  for (const raw of results) {
+    const candidate = toLyricsCandidate(raw);
+    if (candidate) {
+      candidates.push(candidate);
+      if (candidates.length >= limit) {
+        break;
+      }
+    }
+  }
+  return candidates;
+}
+
 async function searchLyrics(
   track: string,
   artist: string,
