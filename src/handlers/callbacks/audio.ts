@@ -10,9 +10,9 @@ import { searchTracks } from "../../services/deezer";
 import { chatId } from "./index";
 import { takePendingSend, clearPendingSend } from "../bridge";
 import { setTrackFileId } from "../../db/tracks";
-import { isRichDeliveryActive, getUserRichStyle } from "../../db/settings";
-import { sendRichAudio, RichAudioOpts } from "../../utils/richMessages";
-import { resolveRichAudioOpts, fetchCoverUrl } from "../../utils/telegram";
+import { isRichDeliveryActive } from "../../db/settings";
+import { sendRichAudio } from "../../utils/richMessages";
+import { resolveRichAudioOpts } from "../../utils/telegram";
 
 export async function handleAudioDecisionCallback(ctx: Context, session: SessionData, env: Env) {
   const data = ctx.callbackQuery?.data;
@@ -47,6 +47,7 @@ export async function handleAudioDecisionCallback(ctx: Context, session: Session
       String(ctx.from?.id ?? ""),
       typeof lastData.trackId === "number" ? lastData.trackId : undefined,
       lastData.albumCoverUrl,
+      typeof lastData.albumId === "number" ? lastData.albumId : undefined,
     );
     const caption = await attachAudioAndPromptChannel(
       ctx.api,
@@ -162,18 +163,9 @@ export async function handleSendToChannelCallback(ctx: Context, session: Session
   // without them — e.g. a pre-rich stash — go straight to the plain send.
   const senderId = String(ctx.from?.id ?? "");
   if (trackName && artistName && (await isRichDeliveryActive(env.DB, senderId))) {
-    const style = await getUserRichStyle(env.DB, senderId);
-    let richOpts: RichAudioOpts = { style };
-    if (style === 2 || style === 3) {
-      const sessionCover = (session.telegraph.data as any)?.albumCoverUrl;
-      if (sessionCover) {
-        richOpts.coverUrl = sessionCover;
-      } else if (trackId) {
-        richOpts.coverUrl = await fetchCoverUrl(trackId);
-      }
-    } else if (style === 4 && trackId) {
-      richOpts.deezerUrl = `https://www.deezer.com/track/${trackId}`;
-    }
+    const sessionCover = (session.telegraph.data as any)?.albumCoverUrl;
+    const sessionAlbum = (session.telegraph.data as any)?.albumId;
+    const richOpts = await resolveRichAudioOpts(env.DB, senderId, trackId, sessionCover, sessionAlbum);
     const richOk = await sendRichAudio(ctx.api, Number(channelId), audioFileId, trackName, artistName, telegraphUrl, richOpts);
     if (richOk) {
       await ctx.editMessageText("✅ Sent to channel!");

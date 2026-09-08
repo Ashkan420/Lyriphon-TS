@@ -140,22 +140,22 @@ describe("buildRichAudioDelivery", () => {
     expect(html).toContain(">Lyrics</tg-button>");
   });
 
-  it("style 4: Lyrics + Deezer dual buttons", () => {
-    const { html } = buildRichAudioDelivery({ ...base, style: 4, deezerUrl: "https://www.deezer.com/track/138545995" });
+  it("style 4: Lyrics + album deezload dual buttons", () => {
+    const { html } = buildRichAudioDelivery({ ...base, style: 4, deezerUrl: "https://t.me/deezload2bot?start=deezertalbum1020904331" });
     expect(html).toContain(">Lyrics</tg-button>");
-    expect(html).toContain('url="https://www.deezer.com/track/138545995"');
-    expect(html).toContain("🎵 Deezer</tg-button>");
+    expect(html).toContain('url="https://t.me/deezload2bot?start=deezertalbum1020904331"');
+    expect(html).toContain("💽 Album</tg-button>");
     expect(html).not.toContain("<img");
   });
 
-  it("degrades 2/3 without a cover and 4 without a deezer URL to the style-1 body", () => {
+  it("degrades 2/3 without a cover and 4 without an album link to the style-1 body", () => {
     const noCover2 = buildRichAudioDelivery({ ...base, style: 2 });
     const noCover3 = buildRichAudioDelivery({ ...base, style: 3 });
     const noDeezer4 = buildRichAudioDelivery({ ...base, style: 4 });
     for (const { html } of [noCover2, noCover3, noDeezer4]) {
       expect(html).toContain(">Song — Artist</tg-button>");
       expect(html).not.toContain("<img");
-      expect(html).not.toContain("Deezer");
+      expect(html).not.toContain("💽");
     }
   });
 

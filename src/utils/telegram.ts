@@ -167,10 +167,23 @@ export async function fetchCoverUrl(trackId: number): Promise<string | undefined
   }
 }
 
+// Style 4's second button: the deezload album link for the track's release
+// (same URL the Telegraph page's 💽 Album entry uses). Undefined on failure —
+// the style engine degrades to the single-button body.
+export async function fetchAlbumDeezerUrl(trackId: number): Promise<string | undefined> {
+  try {
+    const t = (await getTrack(trackId)) as any;
+    return t?.album?.id ? `${DEEZLOAD_BOT}deezertalbum${t.album.id}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Resolve the user's rich-style options for a real delivery: read the style
-// pref, and only fetch the Deezer cover when the chosen layout needs it
-// (styles 2/3). Everything degrades to undefined on failure — style engine
-// then renders the style-1 body.
+// pref, and only fetch from Deezer when the chosen layout needs it (covers
+// for styles 2/3, the album id for style 4's deezload button). Everything
+// degrades to undefined on failure — style engine then renders the style-1
+// body.
 export async function resolveRichAudioOpts(
   db: D1Database,
   userId: string,
@@ -191,10 +204,14 @@ export async function resolveRichAudioOpts(
     } else if (trackId) {
       opts.coverUrl = await fetchCoverUrl(trackId);
     }
-  } else if (style === 4 && albumId) {
-    // deezload album link — the bot also accepts track targets, but the
-    // album entry point fetches the whole release in one go.
-    opts.deezerUrl = `${DEEZLOAD_BOT}deezertalbum${albumId}`;
+  } else if (style === 4) {
+    if (albumId) {
+      opts.deezerUrl = `${DEEZLOAD_BOT}deezertalbum${albumId}`;
+    } else if (trackId) {
+      // Call sites without session state (bridge) know only the track —
+      // look the album up once.
+      opts.deezerUrl = await fetchAlbumDeezerUrl(trackId);
+    }
   }
   return opts;
 }

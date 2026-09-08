@@ -25,7 +25,7 @@ import {
   getSetting,
   setSetting,
 } from "../db/settings";
-import { safeAnswer, safeDelete, fetchCoverUrl } from "../utils/telegram";
+import { safeAnswer, safeDelete, fetchCoverUrl, fetchAlbumDeezerUrl } from "../utils/telegram";
 import {
   sendRichAudio,
   RICH_STYLES,
@@ -279,14 +279,15 @@ async function previewRichStyle(ctx: Context, env: Env, userId: string, style: R
     await safeDelete(ctx.api as any, chatId, state.lastDemoMsgId);
   }
 
-  // Styles 2/3 need the album cover; 4 needs the Deezer link. Demo data is
-  // fixed, so resolve directly instead of resolveRichAudioOpts's per-user path.
+  // Styles 2/3 need the album cover; 4 needs the deezload album link. Demo
+  // data is fixed, so resolve directly instead of resolveRichAudioOpts's
+  // per-user path.
   let coverUrl: string | undefined;
   let deezerUrl: string | undefined;
   if (style === 2 || style === 3) {
     coverUrl = await fetchCoverUrl(RICH_DEMO.trackId);
   } else if (style === 4) {
-    deezerUrl = `https://www.deezer.com/track/${RICH_DEMO.trackId}`;
+    deezerUrl = await fetchAlbumDeezerUrl(RICH_DEMO.trackId);
   }
 
   const msg = await sendRichAudio(

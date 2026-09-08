@@ -328,7 +328,7 @@ export const RICH_STYLES: Record<RichStyleId, { name: string; description: strin
   },
   4: {
     name: "Dual buttons",
-    description: "audio player + Lyrics and Deezer buttons",
+    description: "audio player + Lyrics and album download buttons",
   },
 };
 
@@ -361,7 +361,7 @@ export function buildRichAudioDelivery(options: {
     html = `${audioBlock}\n` +
       `<tg-button-row align="center">` +
       `${lyricsButton}` +
-      `<tg-button type="url" style="link" url="${esc(options.deezerUrl)}">🎵 Deezer</tg-button>` +
+      `<tg-button type="url" style="link" url="${esc(options.deezerUrl)}">💽 Album</tg-button>` +
       `</tg-button-row>`;
   } else {
     // Style 1 and every degraded case (2/3 without cover, 4 without the
