@@ -239,11 +239,11 @@ export async function handleAlbumPickCallback(ctx: Context, env: Env): Promise<v
   if (!Number.isFinite(albumId)) {
     return;
   }
-  await safeAnswer(ctx);
   if (!isBotOwner(ctx, env)) {
     await safeAnswer(ctx, "Admin only.");
     return;
   }
+  await safeAnswer(ctx);
   await openAlbumView(ctx, env, albumId);
 }
 
@@ -332,10 +332,10 @@ export async function handleAlbumGetAll(ctx: Context, env: Env): Promise<void> {
   const albumId = Number(data.replace("album/", "").replace("/down", ""));
   const userId = String(ctx.from?.id ?? "");
   const chatId = ctx.chat?.id;
+  log("album: getall click", JSON.stringify({ data, albumId, userId }));
   if (!Number.isFinite(albumId) || !userId || chatId === undefined) {
     return;
   }
-  await safeAnswer(ctx);
   if (!isBotOwner(ctx, env)) {
     await safeAnswer(ctx, "Admin only.");
     return;
@@ -366,6 +366,7 @@ export async function handleAlbumGetAll(ctx: Context, env: Env): Promise<void> {
     : new Set(tracks.map((t) => Number(t.id)));
   const selectedTracks = tracks.filter((t) => selectedIds.has(Number(t.id)));
   const route = routeForSelection(selectedTracks.length);
+  await safeAnswer(ctx);
 
   const batchToken = crypto.randomUUID();
   try {
@@ -525,7 +526,6 @@ export async function handleAlbumCancel(ctx: Context, env: Env): Promise<void> {
   if (!batchToken) {
     return;
   }
-  await safeAnswer(ctx);
   if (!isBotOwner(ctx, env)) {
     await safeAnswer(ctx, "Admin only.");
     return;

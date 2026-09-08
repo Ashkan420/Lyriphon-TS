@@ -102,12 +102,21 @@ export async function getAlbumBatch(db: D1Database, batchToken: string): Promise
   return row ?? null;
 }
 
+// Only a RECENTLY updated pending batch blocks a new run. Stale rows (a run
+// whose bridge jobs all died without delivery — e.g. leftover from an old
+// deploy) never reach a terminal state on their own, and without this window
+// they would block GET ALL forever; rows older than the request TTL + buffer
+// can't have live jobs anyway.
+const PENDING_BATCH_FRESH_SECONDS = 3 * 3600;
+
 export async function hasPendingBatchForUser(db: D1Database, userId: string): Promise<boolean> {
   await ensureTable(db);
   const row = await db.prepare(`
-    SELECT batch_token FROM album_batches WHERE user_id = ? AND status = 'pending' LIMIT 1
+    SELECT batch_token FROM album_batches
+    WHERE user_id = ? AND status = 'pending' AND updated_at >= unixepoch() - ?
+    LIMIT 1
   `)
-    .bind(userId)
+    .bind(userId, PENDING_BATCH_FRESH_SECONDS)
     .first<{ batch_token: string }>();
   return Boolean(row);
 }
