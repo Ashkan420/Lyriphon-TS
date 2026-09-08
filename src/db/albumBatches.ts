@@ -17,6 +17,11 @@ export type AlbumBatchRow = {
   release_date: string;
   track_count: number;
   status: AlbumBatchStatus;
+  // JSON array of the selected track_ids (the only ones the rich message
+  // includes; unselected album-route files are just cached).
+  selected: string | null;
+  // The "⏳ Fetching…" status message, edited to the final receipt.
+  status_msg_id: number | null;
   album_msg_id: number | null;
   created_at: number;
   updated_at: number;
@@ -28,6 +33,14 @@ async function ensureTable(db: D1Database) {
   if (tableReady) return;
   try {
     await db.prepare("SELECT 1 FROM album_batches LIMIT 1").all();
+    // Table predates selected/status_msg_id — add them idempotently.
+    for (const col of ["selected", "status_msg_id"]) {
+      try {
+        await db.prepare(`SELECT ${col} FROM album_batches LIMIT 1`).all();
+      } catch {
+        await db.prepare(`ALTER TABLE album_batches ADD COLUMN ${col} TEXT`).run();
+      }
+    }
     tableReady = true;
   } catch {
     await db.prepare(`
@@ -42,6 +55,8 @@ async function ensureTable(db: D1Database) {
         release_date TEXT,
         track_count INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending',
+        selected TEXT,
+        status_msg_id INTEGER,
         album_msg_id INTEGER,
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
         updated_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -79,7 +94,7 @@ export async function getAlbumBatch(db: D1Database, batchToken: string): Promise
   await ensureTable(db);
   const row = await db.prepare(`
     SELECT batch_token, user_id, chat_id, album_id, title, artist, cover_url, release_date,
-           track_count, status, album_msg_id, created_at, updated_at
+           track_count, status, selected, status_msg_id, album_msg_id, created_at, updated_at
     FROM album_batches WHERE batch_token = ?
   `)
     .bind(batchToken)
@@ -116,5 +131,23 @@ export async function setBatchAlbumMsg(db: D1Database, batchToken: string, messa
     UPDATE album_batches SET album_msg_id = ?, updated_at = unixepoch() WHERE batch_token = ?
   `)
     .bind(messageId, batchToken)
+    .run();
+}
+
+export async function setBatchStatusMsg(db: D1Database, batchToken: string, messageId: number): Promise<void> {
+  await ensureTable(db);
+  await db.prepare(`
+    UPDATE album_batches SET status_msg_id = ?, updated_at = unixepoch() WHERE batch_token = ?
+  `)
+    .bind(messageId, batchToken)
+    .run();
+}
+
+export async function setBatchSelected(db: D1Database, batchToken: string, trackIds: number[]): Promise<void> {
+  await ensureTable(db);
+  await db.prepare(`
+    UPDATE album_batches SET selected = ?, updated_at = unixepoch() WHERE batch_token = ?
+  `)
+    .bind(JSON.stringify(trackIds), batchToken)
     .run();
 }

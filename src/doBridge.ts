@@ -35,6 +35,9 @@ type CurrentJob = {
   token: string;
   trackId: number;
   chatId: number;
+  // Set = album-stream job: one deezertalbum command, N audios tagged
+  // lyq:albumfile back into the bridge DM.
+  albumId?: number;
   startedAt: number;
 };
 
@@ -227,9 +230,15 @@ export class BridgeDO {
   }
 
   private async handleEnqueue(request: Request): Promise<Response> {
-    const body = (await request.json()) as { token: string; trackId: number; chatId: number };
+    const body = (await request.json()) as {
+      token: string;
+      trackId: number;
+      chatId: number;
+      albumId?: number;
+    };
     // Type checks, not falsy checks: inline rows pass chatId 0 (chatless —
-    // delivery edits the inline message instead of DM-sending).
+    // delivery edits the inline message instead of DM-sending). albumId set
+    // (+ trackId 0) = one album-stream job instead of a single track.
     if (typeof body?.token !== "string" || !body.token
       || typeof body?.trackId !== "number" || !Number.isFinite(body.trackId)
       || typeof body?.chatId !== "number" || !Number.isFinite(body.chatId)) {
@@ -246,6 +255,7 @@ export class BridgeDO {
       token: body.token,
       trackId: body.trackId,
       chatId: body.chatId,
+      albumId: typeof body.albumId === "number" && Number.isFinite(body.albumId) ? body.albumId : undefined,
       startedAt: Date.now(),
     };
     queue.push(job);
@@ -253,7 +263,7 @@ export class BridgeDO {
 
     // position = jobs ahead in queue + (1 if something is running now) + 1
     const position = queue.length + (this.processing ? 1 : 0);
-    log("BridgeDO: job queued", JSON.stringify({ token: body.token, trackId: body.trackId, position }));
+    log("BridgeDO: job queued", JSON.stringify({ token: body.token, trackId: body.trackId, albumId: job.albumId ?? null, position }));
 
     this.state.waitUntil(this.pump());
     return Response.json({ ok: true, position });
@@ -278,8 +288,17 @@ export class BridgeDO {
   private async runJob(job: CurrentJob): Promise<void> {
     try {
       const peer = await this.bridgePeer();
-      await this.jobs.fetchTrack(job.trackId, peer, job.token);
-      log("BridgeDO: job forwarded", JSON.stringify({ token: job.token }));
+      if (job.albumId !== undefined) {
+        // Album job: one deezertalbum command; failures are reported per
+        // file by the lyq:albumfile stream (an empty stream rejects here,
+        // failing the single album row via failRequestDirectly → the album
+        // failure path in bridge.ts).
+        const count = await this.jobs.fetchAlbum(job.albumId, peer, job.token);
+        log("BridgeDO: album forwarded", JSON.stringify({ token: job.token, albumId: job.albumId, count }));
+      } else {
+        await this.jobs.fetchTrack(job.trackId, peer, job.token);
+        log("BridgeDO: job forwarded", JSON.stringify({ token: job.token }));
+      }
     } catch (error: any) {
       const reason = String(error?.message ?? error).slice(0, 200);
       warn("BridgeDO: job failed", JSON.stringify({ token: job.token, reason }));
@@ -343,7 +362,10 @@ export class BridgeDO {
 
   private async armWatchdog(job: CurrentJob): Promise<void> {
     if (typeof (this.state as any).setAlarm === "function") {
-      await (this.state as any).setAlarm(job.startedAt + AUTOFETCH_JOB_TIMEOUT_MS);
+      // Album streams legitimately run long (N files, serial, with deezload
+      // gaps) — give them a multiple of the per-track budget.
+      const budget = job.albumId !== undefined ? AUTOFETCH_JOB_TIMEOUT_MS * 4 : AUTOFETCH_JOB_TIMEOUT_MS;
+      await (this.state as any).setAlarm(job.startedAt + budget);
     }
   }
 

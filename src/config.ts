@@ -25,5 +25,8 @@ export const AUTOFETCH_JOB_TIMEOUT_MS = 240000;
 // Sized for album batches (up to ALBUM_MAX_TRACKS tracks in one run).
 export const AUTOFETCH_MAX_QUEUE = 30;
 
-// Admin-only album search: max tracks pulled per album run.
+// Admin-only album search: max tracks pulled per album run, and the
+// selection size at which we switch from N deezerttrack jobs (≤ threshold,
+// gentle) to ONE deezertalbum job (deezload streams the whole album).
 export const ALBUM_MAX_TRACKS = 20;
+export const ALBUM_TRACK_THRESHOLD = 5;

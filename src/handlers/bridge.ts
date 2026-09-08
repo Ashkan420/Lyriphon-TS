@@ -35,7 +35,7 @@ import {
 } from "../db/settings";
 import { sendRichAudio } from "../utils/richMessages";
 import { resolveRichAudioOpts } from "../utils/telegram";
-import { assembleAlbumIfComplete } from "./album";
+import { onAlbumProgress, deliverAlbumFile, finishAlbumStream, deliverSelectedTrackFile } from "./album";
 import { AUTOFETCH_REQUEST_TTL_SECONDS } from "../config";
 import { setTrackFileId } from "../db/tracks";
 import { getUserChannels } from "../db/channels";
@@ -74,14 +74,28 @@ async function takeStashedAudio(env: Env): Promise<string | undefined> {
   }
 }
 
-export type BridgeMessage = { kind: "file"; token: string } | { kind: "fail"; token: string };
+export type BridgeMessage =
+  | { kind: "file"; token: string }
+  | { kind: "fail"; token: string }
+  | { kind: "albumfile"; token: string; idx: number }
+  | { kind: "albumdone"; token: string; count: number };
 
-// Matches the two control messages the Telethon script sends back:
-//   lyq:file req=<token>  (caption on the audio/document)
+// Matches the control messages the Telethon script (or BridgeDO) sends back:
+//   lyq:file req=<token>             (caption on the audio/document)
 //   lyq:fail req=<token> [reason]
+//   lyq:albumfile req=<token> idx=<n>   (album-stream arrival, nth file)
+//   lyq:albumdone req=<token> count=<k> (album stream finished)
 // Extra trailing text (the fail reason) is tolerated.
 export function parseBridgeMessage(text: string | undefined | null): BridgeMessage | null {
   if (!text) return null;
+  const albumFile = text.match(/^lyq:albumfile req=(\S+) idx=(\d+)(?:\s|$)/);
+  if (albumFile) {
+    return { kind: "albumfile", token: albumFile[1], idx: Number(albumFile[2]) };
+  }
+  const albumDone = text.match(/^lyq:albumdone req=(\S+) count=(\d+)(?:\s|$)/);
+  if (albumDone) {
+    return { kind: "albumdone", token: albumDone[1], count: Number(albumDone[2]) };
+  }
   const match = text.match(/^lyq:(file|fail) req=(\S+)(?:\s|$)/);
   if (!match) return null;
   return { kind: match[1] as "file" | "fail", token: match[2] };
@@ -133,6 +147,28 @@ export async function handleBridgeUpdate(env: Env, update: any): Promise<void> {
       return;
     }
 
+    // Album-stream arrivals: same forward + tag pattern, scoped to the
+    // batch (job token = batch token). Albums always tag, so they never
+    // consume the single-track stash.
+    if (parsed?.kind === "albumfile") {
+      const replyAudio = message.reply_to_message?.audio ?? message.reply_to_message?.document;
+      let fileId = replyAudio?.file_id;
+      if (!fileId) {
+        fileId = await takeStashedAudio(env);
+      }
+      if (fileId) {
+        await deliverAlbumFile(env, parsed.token, parsed.idx, fileId);
+        return;
+      }
+      warn("bridge: albumfile tag with neither reply media nor stashed audio", parsed.token, parsed.idx);
+      return;
+    }
+
+    if (parsed?.kind === "albumdone") {
+      await finishAlbumStream(env, parsed.token, parsed.count);
+      return;
+    }
+
     if (parsed?.kind === "fail") {
       await reportFailure(env, parsed.token);
       return;
@@ -155,16 +191,10 @@ async function deliverFile(env: Env, audio: any, token: string): Promise<void> {
   if (!row) return;
 
   // Album-batch rows skip the DM delivery entirely: the file only lands in
-  // the final assembled album rich message. Store the file_id (the assembly
-  // reads it from the tracks store), flip the row, and nudge assembly.
+  // the final assembled album rich message. The per-track route builds the
+  // page lazily here; the album route (deliverAlbumFile) pairs by arrival.
   if (row.album_token) {
-    await setRequestStatus(env.DB, token, "delivered");
-    try {
-      await setTrackFileId(env.DB, row.track_id, audio.file_id);
-    } catch (error) {
-      warn("bridge: album delivery failed to store track file_id", error);
-    }
-    await assembleAlbumIfComplete(env, row.album_token);
+    await deliverSelectedTrackFile(env, row, audio.file_id);
     log("bridge: album track delivered", JSON.stringify({ token, trackId: row.track_id }));
     return;
   }
@@ -269,7 +299,7 @@ async function reportFailure(env: Env, token: string): Promise<void> {
   // Album rows fail silently into the assembly (deezload-note line); no DM
   // notify, no inline edit.
   if (row.album_token) {
-    await assembleAlbumIfComplete(env, row.album_token);
+    await onAlbumProgress(env, row.album_token);
     return;
   }
 

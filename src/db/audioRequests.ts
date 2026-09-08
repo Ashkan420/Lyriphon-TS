@@ -194,3 +194,15 @@ export async function expireAllPending(db: D1Database): Promise<number> {
   `).run();
   return result?.meta?.changes ?? 0;
 }
+
+// Album cancel: expire every still-pending row of one batch. Delivered rows
+// keep their status (they'll render in the assembled message).
+export async function expireBatchPending(db: D1Database, albumToken: string): Promise<void> {
+  await ensureTable(db);
+  await db.prepare(`
+    UPDATE audio_requests SET status = 'expired', updated_at = unixepoch()
+    WHERE album_token = ? AND status = 'pending'
+  `)
+    .bind(albumToken)
+    .run();
+}

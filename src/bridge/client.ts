@@ -23,6 +23,9 @@ import { WorkersTcpSocket } from "./socket";
 export const DEEZLOAD_USERNAME = "deezload2bot";
 
 const DEEZLOAD_AUDIO_TIMEOUT_MS = 180000;
+// Album stream: silence of this length after the last audio means deezload
+// is done sending (it streams files one by one with gaps).
+const DEEZLOAD_ALBUM_QUIET_MS = 45000;
 // A hung TCP/handshake must fail loudly instead of wedging the DO forever.
 const CONNECT_TIMEOUT_MS = 45000;
 const SIGNIN_TOTAL_TIMEOUT_MS = 180000;
@@ -415,6 +418,96 @@ export class BridgeJobs {
 
       client.addEventHandler(handler, raw);
     });
+  }
+
+  /**
+   * Fetch a whole album with ONE deezload command (`/start
+   * deezertalbum<id>` — spamming N per-track commands is what froze the
+   * bot). Resolves when the stream goes quiet: deezload sends the files one
+   * by one; each audio resets an inactivity timer, and when the timer fires
+   * (quiet period) the stream is considered done. Each audio is forwarded
+   * into the bridge DM and tagged `lyq:albumfile req=<token> idx=<n>` so the
+   * webhook can pair arrivals to batch rows. Serial job execution in
+   * BridgeDO guarantees no other job interleaves with the stream.
+   * Returns the number of audios forwarded.
+   */
+  async fetchAlbum(albumId: number, bridgePeer: string, token: string): Promise<number> {
+    const client = await this.bridge.get();
+    const deezload = await client.getEntity(DEEZLOAD_USERNAME);
+
+    await client.sendMessage(deezload, {
+      message: `/start deezertalbum${albumId}`,
+      linkPreview: false,
+    });
+
+    const audios: Api.Message[] = [];
+    await new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+
+      const handler = (update: any) => {
+        if (settled) return;
+        const msg = update?.message;
+        if (!msg || typeof msg.id !== "number") return;
+        const mime = String(msg.document?.mimeType ?? msg.audio?.mimeType ?? "");
+        const isAudio = Boolean(msg.audio) || mime.startsWith("audio/");
+        if (!isAudio) return; // cover photo / status text: skipped
+        audios.push(msg as Api.Message);
+        // Each arrival resets the quiet-period timer.
+        clearTimeout(timer);
+        timer = setTimeout(finish, DEEZLOAD_ALBUM_QUIET_MS);
+      };
+
+      const raw = new Raw({});
+      const cleanup = () => {
+        clearTimeout(timer);
+        client.removeEventHandler(handler, raw);
+      };
+
+      // Overall cap: if nothing at all arrives within the normal track
+      // timeout, fail the job (deezload never started).
+      timer = setTimeout(() => {
+        if (audios.length === 0) {
+          settled = true;
+          cleanup();
+          reject(new Error(`no audio from deezload for album ${albumId} within timeout`));
+          return;
+        }
+        finish();
+      }, DEEZLOAD_AUDIO_TIMEOUT_MS);
+
+      client.addEventHandler(handler, raw);
+    });
+
+    // Forward each audio into the bridge DM with its arrival-order tag.
+    for (let i = 0; i < audios.length; i++) {
+      const forwarded = await client.forwardMessages(bridgePeer as any, {
+        messages: [audios[i].id],
+        fromPeer: deezload,
+        dropAuthor: false,
+      });
+      const forward = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+      await client.sendMessage(bridgePeer as any, {
+        message: `lyq:albumfile req=${token} idx=${i + 1}`,
+        replyTo: forward.id,
+        linkPreview: false,
+      });
+    }
+
+    // Tell the webhook the stream is over.
+    await client.sendMessage(bridgePeer as any, {
+      message: `lyq:albumdone req=${token} count=${audios.length}`,
+      linkPreview: false,
+    });
+
+    return audios.length;
   }
 }
 
