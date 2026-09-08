@@ -32,6 +32,18 @@ function bytesStartsWith(bytes: Uint8Array, ascii: string): boolean {
   return true;
 }
 
+// Decode TL bytes to a printable ASCII string (non-printables → '?') — for
+// logging what a button's callback data actually contains.
+function bytesToAscii(bytes: Uint8Array | undefined, max = 64): string {
+  if (!bytes) return "";
+  let out = "";
+  for (let i = 0; i < Math.min(bytes.length, max); i++) {
+    const c = bytes[i];
+    out += c >= 32 && c < 127 ? String.fromCharCode(c) : "?";
+  }
+  return out;
+}
+
 const DEEZLOAD_AUDIO_TIMEOUT_MS = 180000;
 // Album stream: silence of this length after the last audio means deezload
 // is done sending (it streams files one by one with gaps).
@@ -447,25 +459,29 @@ export class BridgeJobs {
     const client = await this.bridge.get();
     const deezload = await client.getEntity(DEEZLOAD_USERNAME);
 
-    // Deezload's album view is a fast, cached reply — the event listener
-    // MUST be armed before the /start lands, or the view is missed and the
-    // job silently waits out its timeout.
-    const audioPromise = this.collectAlbumAudio(client, albumId);
-
     // Freshness anchor: the view must be posted/edited at or after this
     // moment. NOT an id comparison — MTProto private chats keep a separate
     // id sequence per participant, so deezload's message ids mean nothing
     // against ours; timestamps are the only cross-sequence-safe order.
     const startedAt = Math.floor(Date.now() / 1000);
 
+    // BOTH collectors armed BEFORE the /start send. Deezload's album view
+    // is a fast cached reply — a listener registered after the send can
+    // miss it entirely. Every promise here resolves (never rejects): the
+    // view waiter resolves null on timeout, the audio collector resolves
+    // an empty array — so no dangling-rejection bookkeeping either.
+    const viewPromise = this.waitForAlbumView(client, deezload, albumId, startedAt);
+    const audioPromise = this.collectAlbumAudio(client, albumId);
+
     await client.sendMessage(deezload, {
       message: `/start deezertalbum${albumId}`,
       linkPreview: false,
     });
 
-    const view = await this.waitForAlbumView(client, deezload, albumId, startedAt);
+    const view = await viewPromise;
     if (!view) {
       audioPromise.catch(() => {});
+      await this.dumpRecentMessages(client, deezload, albumId);
       throw new Error(`no album view from deezload for album ${albumId}`);
     }
 
@@ -627,10 +643,10 @@ export class BridgeJobs {
   }
 
   // Collect streamed audios; every arrival resets a quiet-period timer, and
-  // when it fires the stream is done. Nothing arriving at all within the
-  // track timeout rejects (deezload never started streaming).
+  // when it fires the stream is done. Never rejects: zero audios within the
+  // track timeout resolves an empty array (the caller decides that's fatal).
   private async collectAlbumAudio(client: TelegramClient, albumId: number): Promise<Api.Message[]> {
-    return new Promise<Api.Message[]>((resolve, reject) => {
+    return new Promise<Api.Message[]>((resolve) => {
       const audios: Api.Message[] = [];
       let timer: ReturnType<typeof setTimeout> | undefined;
       let settled = false;
@@ -661,18 +677,31 @@ export class BridgeJobs {
         client.removeEventHandler(handler, raw);
       };
 
-      timer = setTimeout(() => {
-        if (audios.length === 0) {
-          settled = true;
-          cleanup();
-          reject(new Error(`no audio from deezload for album ${albumId} within timeout`));
-          return;
-        }
-        finish();
-      }, DEEZLOAD_AUDIO_TIMEOUT_MS);
+      timer = setTimeout(finish, DEEZLOAD_AUDIO_TIMEOUT_MS);
 
       client.addEventHandler(handler, raw);
     });
+  }
+
+  // Timeout diagnostic: log what the recent deezload messages actually look
+  // like (id, date, keyboard presence, decoded callback data) so a matcher
+  // mismatch is visible in wrangler tail instead of a bare timeout.
+  private async dumpRecentMessages(client: TelegramClient, deezload: any, albumId: number): Promise<void> {
+    try {
+      const msgs = await client.getMessages(deezload, { limit: 5 });
+      log(`bridge: album ${albumId} view timeout — recent deezload messages:`);
+      for (const m of msgs) {
+        const buttons = this.collectCallbackButtons(m as Api.Message);
+        log(
+          `  - id=${(m as any).id} date=${(m as any).date} buttons=${buttons.length}` +
+          (buttons.length
+            ? ` data=[${buttons.slice(0, 6).map((b) => `"${b.text}"→${bytesToAscii(b.data)}`).join(", ")}]`
+            : ""),
+        );
+      }
+    } catch (error) {
+      warn("bridge: album view dump failed", error);
+    }
   }
 }
 
