@@ -102,23 +102,37 @@ export async function getAlbumBatch(db: D1Database, batchToken: string): Promise
   return row ?? null;
 }
 
-// Only a RECENTLY updated pending batch blocks a new run. Stale rows (a run
-// whose bridge jobs all died without delivery — e.g. leftover from an old
-// deploy) never reach a terminal state on their own, and without this window
-// they would block GET ALL forever; rows older than the request TTL + buffer
-// can't have live jobs anyway.
+// Only a RECENTLY updated pending batch blocks a new run — and only if it's
+// actually alive (has non-expired pending audio_requests rows). A batch whose
+// rows all died (bridge reset, failed enqueues, TTL expiry) can never reach
+// its terminal flip on its own, so the guard self-heals: those batches are
+// flipped complete here instead of blocking GET ALL forever.
 const PENDING_BATCH_FRESH_SECONDS = 3 * 3600;
 
 export async function hasPendingBatchForUser(db: D1Database, userId: string): Promise<boolean> {
   await ensureTable(db);
-  const row = await db.prepare(`
+  const result = await db.prepare(`
     SELECT batch_token FROM album_batches
     WHERE user_id = ? AND status = 'pending' AND updated_at >= unixepoch() - ?
-    LIMIT 1
   `)
     .bind(userId, PENDING_BATCH_FRESH_SECONDS)
-    .first<{ batch_token: string }>();
-  return Boolean(row);
+    .all<{ batch_token: string }>();
+  const pending = result.results ?? [];
+  if (!pending.length) {
+    return false;
+  }
+
+  const { getRequestsByAlbumToken, isRequestExpired } = await import("./audioRequests");
+  for (const row of pending) {
+    const reqs = await getRequestsByAlbumToken(db, row.batch_token);
+    const alive = reqs.some((r) => r.status === "pending" && !isRequestExpired(r));
+    if (alive) {
+      return true;
+    }
+    // Dead batch — flip it so it stops blocking.
+    await markBatchComplete(db, row.batch_token);
+  }
+  return false;
 }
 
 // The double-send guard: exactly one caller flips pending → complete and
