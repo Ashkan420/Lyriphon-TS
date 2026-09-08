@@ -22,6 +22,15 @@ import { WorkersTcpSocket } from "./socket";
 
 export const DEEZLOAD_USERNAME = "deezload2bot";
 
+// Callback data is TL bytes; compare against an ASCII prefix byte by byte.
+function bytesStartsWith(bytes: Uint8Array, ascii: string): boolean {
+  if (bytes.length < ascii.length) return false;
+  for (let i = 0; i < ascii.length; i++) {
+    if (bytes[i] !== ascii.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
 const DEEZLOAD_AUDIO_TIMEOUT_MS = 180000;
 // Album stream: silence of this length after the last audio means deezload
 // is done sending (it streams files one by one with gaps).
@@ -440,51 +449,29 @@ export class BridgeJobs {
       linkPreview: false,
     });
 
-    const audios: Api.Message[] = [];
-    await new Promise<void>((resolve, reject) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let settled = false;
+    // Deezload's album view: the first reply message carrying callback
+    // buttons (photo+buttons or text+buttons).
+    const view = await this.waitForAlbumView(client, albumId);
 
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      };
+    // Press GET ALL⬇️: find the button whose data starts with the album
+    // down-token (`album/<id>/down`) and answer its callback.
+    const target = this.collectCallbackButtons(view).find(
+      (b) => b.data && bytesStartsWith(b.data, `album/${albumId}/down`),
+    );
+    if (!target) {
+      throw new Error(`deezload album view for ${albumId} has no GET ALL button`);
+    }
+    await client.invoke(
+      new Api.messages.GetBotCallbackAnswer({
+        peer: deezload,
+        msgId: view.id,
+        // The button's data is already the exact TL bytes to echo back.
+        data: target.data as any,
+      }),
+    );
 
-      const handler = (update: any) => {
-        if (settled) return;
-        const msg = update?.message;
-        if (!msg || typeof msg.id !== "number") return;
-        const mime = String(msg.document?.mimeType ?? msg.audio?.mimeType ?? "");
-        const isAudio = Boolean(msg.audio) || mime.startsWith("audio/");
-        if (!isAudio) return; // cover photo / status text: skipped
-        audios.push(msg as Api.Message);
-        // Each arrival resets the quiet-period timer.
-        clearTimeout(timer);
-        timer = setTimeout(finish, DEEZLOAD_ALBUM_QUIET_MS);
-      };
-
-      const raw = new Raw({});
-      const cleanup = () => {
-        clearTimeout(timer);
-        client.removeEventHandler(handler, raw);
-      };
-
-      // Overall cap: if nothing at all arrives within the normal track
-      // timeout, fail the job (deezload never started).
-      timer = setTimeout(() => {
-        if (audios.length === 0) {
-          settled = true;
-          cleanup();
-          reject(new Error(`no audio from deezload for album ${albumId} within timeout`));
-          return;
-        }
-        finish();
-      }, DEEZLOAD_AUDIO_TIMEOUT_MS);
-
-      client.addEventHandler(handler, raw);
-    });
+    // Collect the streamed audios until the stream goes quiet.
+    const audios = await this.collectAlbumAudio(client, albumId);
 
     // Forward each audio into the bridge DM with its arrival-order tag.
     for (let i = 0; i < audios.length; i++) {
@@ -508,6 +495,103 @@ export class BridgeJobs {
     });
 
     return audios.length;
+  }
+
+  // The album view is the first message deezload posts after /start that
+  // carries any inline keyboard (photo+buttons or text+buttons).
+  private async waitForAlbumView(client: TelegramClient, albumId: number): Promise<Api.Message> {
+    return new Promise<Api.Message>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+
+      const handler = (update: any) => {
+        if (settled) return;
+        const msg = update?.message;
+        if (!msg || typeof msg.id !== "number") return;
+        const rows = (msg.replyMarkup as any)?.rows;
+        if (!Array.isArray(rows) || !rows.length) {
+          return; // not the view
+        }
+        settled = true;
+        cleanup();
+        resolve(msg as Api.Message);
+      };
+
+      const raw = new Raw({});
+      const cleanup = () => {
+        clearTimeout(timer);
+        client.removeEventHandler(handler, raw);
+      };
+      timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error(`no album view from deezload for album ${albumId} within timeout`));
+      }, DEEZLOAD_AUDIO_TIMEOUT_MS);
+
+      client.addEventHandler(handler, raw);
+    });
+  }
+
+  // Flatten replyMarkup rows into {text, data} callback buttons.
+  private collectCallbackButtons(msg: Api.Message): Array<{ text: string; data?: Uint8Array }> {
+    const out: Array<{ text: string; data?: Uint8Array }> = [];
+    const rows = (msg.replyMarkup as any)?.rows ?? [];
+    for (const row of rows) {
+      for (const btn of row.buttons ?? []) {
+        out.push({ text: String(btn.text ?? ""), data: btn.data });
+      }
+    }
+    return out;
+  }
+
+  // Collect streamed audios; every arrival resets a quiet-period timer, and
+  // when it fires the stream is done. Nothing arriving at all within the
+  // track timeout rejects (deezload never started streaming).
+  private async collectAlbumAudio(client: TelegramClient, albumId: number): Promise<Api.Message[]> {
+    return new Promise<Api.Message[]>((resolve, reject) => {
+      const audios: Api.Message[] = [];
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(audios);
+      };
+
+      const handler = (update: any) => {
+        if (settled) return;
+        const msg = update?.message;
+        if (!msg || typeof msg.id !== "number") return;
+        const mime = String(msg.document?.mimeType ?? msg.audio?.mimeType ?? "");
+        const isAudio = Boolean(msg.audio) || mime.startsWith("audio/");
+        if (!isAudio) return; // cover photo / status text: skipped
+        audios.push(msg as Api.Message);
+        // Each arrival resets the quiet-period timer.
+        clearTimeout(timer);
+        timer = setTimeout(finish, DEEZLOAD_ALBUM_QUIET_MS);
+      };
+
+      const raw = new Raw({});
+      const cleanup = () => {
+        clearTimeout(timer);
+        client.removeEventHandler(handler, raw);
+      };
+
+      timer = setTimeout(() => {
+        if (audios.length === 0) {
+          settled = true;
+          cleanup();
+          reject(new Error(`no audio from deezload for album ${albumId} within timeout`));
+          return;
+        }
+        finish();
+      }, DEEZLOAD_AUDIO_TIMEOUT_MS);
+
+      client.addEventHandler(handler, raw);
+    });
   }
 }
 
