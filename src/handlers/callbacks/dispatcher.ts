@@ -17,6 +17,7 @@ import { handleTranslateCallback } from "./translate";
 import { handleRefreshSummaryCallback } from "./summary";
 import { handleLogsPageCallback, handleLogsCloseCallback } from "./logs";
 import { handleSettingsCallback, handleRichStyleCallback } from "../settings";
+import { handleAlbumPickCallback } from "../album";
 
 // Single stable entry point. `bot.ts` imports handleCallbackQuery /
 // processTextMessage from "../handlers/callbacks" — that barrel re-exports this,
@@ -35,6 +36,11 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
     data === "settings_back"
   ) {
     await handleRichStyleCallback(ctx, env);
+    return;
+  }
+
+  if (data.startsWith("albumpick_")) {
+    await handleAlbumPickCallback(ctx, env);
     return;
   }
 

@@ -17,6 +17,8 @@ import {
   isRichDeliveryEnabled,
   setRichDeliveryEnabled,
   isRichDeliveryActive,
+  isAlbumSearchEnabled,
+  setAlbumSearchEnabled,
   getUserRichStyle,
   setUserRichStyle,
   getUserRichPosition,
@@ -103,6 +105,15 @@ describe("user preference helpers", () => {
     // A user row does not affect the global flag.
     await setUserAutoFetchEnabled(db, "u1", true);
     expect(await isAutoFetchEnabled(db)).toBe(false);
+  });
+
+  it("album search toggle defaults off and flips", async () => {
+    const db = fakeKvDb();
+    expect(await isAlbumSearchEnabled(db)).toBe(false);
+    await setAlbumSearchEnabled(db, true);
+    expect(await isAlbumSearchEnabled(db)).toBe(true);
+    await setAlbumSearchEnabled(db, false);
+    expect(await isAlbumSearchEnabled(db)).toBe(false);
   });
 
   it("rich delivery gate is global AND per-user (both opt-in, fail closed)", async () => {

@@ -4,7 +4,7 @@ import { SessionDO } from "../do";
 import { SessionData } from "../session/types";
 import { formatLogPage, warn, LOG_PAGE_LATEST } from "../utils/logger";
 import { safeAnswer } from "../utils/telegram";
-import { isAutoFetchEnabled, setAutoFetchEnabled, isRichDeliveryEnabled, setRichDeliveryEnabled } from "../db/settings";
+import { isAutoFetchEnabled, setAutoFetchEnabled, isRichDeliveryEnabled, setRichDeliveryEnabled, isAlbumSearchEnabled, setAlbumSearchEnabled } from "../db/settings";
 import { buildLogsNavRow } from "./callbacks/logs";
 import { openBrowserHomeFromAdmin } from "./dbAdmin";
 
@@ -34,6 +34,7 @@ export function adminSettingsText(
   multilingualOn: boolean,
   autofetchOn: boolean,
   richOn: boolean,
+  albumOn: boolean,
 ): string {
   return [
     "⚙️ <b>Admin settings</b>",
@@ -42,6 +43,7 @@ export function adminSettingsText(
     `Multilingual: <b>${multilingualOn ? "on" : "off"}</b>`,
     `Auto-fetch: <b>${autofetchOn ? "on" : "off"}</b>`,
     `Rich delivery: <b>${richOn ? "on" : "off"}</b>`,
+    `Album search: <b>${albumOn ? "on" : "off"}</b>`,
     "",
     "Tap a toggle to switch it. Logs is available while debug is on.",
   ].join("\n");
@@ -52,6 +54,7 @@ export function buildAdminKeyboard(
   multilingualOn: boolean,
   autofetchOn: boolean,
   richOn: boolean,
+  albumOn: boolean,
 ): AdminButton[][] {
   const rows: AdminButton[][] = [
     [
@@ -82,6 +85,13 @@ export function buildAdminKeyboard(
         style: richOn ? "success" : "danger",
       },
     ],
+    [
+      {
+        text: albumOn ? "🎛 Album search: ON" : "🎛 Album search: OFF",
+        callback_data: "admin_toggle_album",
+        style: albumOn ? "success" : "danger",
+      },
+    ],
   ];
 
   if (debugOn) {
@@ -108,10 +118,11 @@ async function renderAdminSettings(
   const multiOn = multilingualEnabled(session);
   const autoOn = await readAutoFetchEnabled(env);
   const richOn = await readRichDeliveryEnabled(env);
+  const albumOn = await readAlbumSearchEnabled(env);
   try {
-    await ctx.editMessageText(adminSettingsText(debugOn, multiOn, autoOn, richOn), {
+    await ctx.editMessageText(adminSettingsText(debugOn, multiOn, autoOn, richOn, albumOn), {
       parse_mode: "HTML",
-      reply_markup: { inline_keyboard: buildAdminKeyboard(debugOn, multiOn, autoOn, richOn) },
+      reply_markup: { inline_keyboard: buildAdminKeyboard(debugOn, multiOn, autoOn, richOn, albumOn) },
     });
   } catch {
     // Ignore "message is not modified" and similar edit races.
@@ -156,6 +167,15 @@ async function readRichDeliveryEnabled(env: Env): Promise<boolean> {
   }
 }
 
+async function readAlbumSearchEnabled(env: Env): Promise<boolean> {
+  try {
+    return await isAlbumSearchEnabled(env.DB);
+  } catch (error) {
+    warn("admin: failed to read album search setting", error);
+    return false;
+  }
+}
+
 export async function adminCommand(
   ctx: Context,
   session: SessionData,
@@ -166,9 +186,10 @@ export async function adminCommand(
   const multiOn = multilingualEnabled(session);
   const autoOn = await readAutoFetchEnabled(env);
   const richOn = await readRichDeliveryEnabled(env);
-  await ctx.reply(adminSettingsText(debugOn, multiOn, autoOn, richOn), {
+  const albumOn = await readAlbumSearchEnabled(env);
+  await ctx.reply(adminSettingsText(debugOn, multiOn, autoOn, richOn, albumOn), {
     parse_mode: "HTML",
-    reply_markup: { inline_keyboard: buildAdminKeyboard(debugOn, multiOn, autoOn, richOn) },
+    reply_markup: { inline_keyboard: buildAdminKeyboard(debugOn, multiOn, autoOn, richOn, albumOn) },
   });
 }
 
@@ -224,6 +245,19 @@ export async function handleAdminCallback(
       await setRichDeliveryEnabled(env.DB, !current);
     } catch (error) {
       warn("admin: failed to toggle rich delivery", error);
+      await safeAnswer(ctx, "❌ Couldn't update the setting (database error).");
+      return;
+    }
+    await renderAdminSettings(ctx, session, sessionDo, env);
+    return;
+  }
+
+  if (data === "admin_toggle_album") {
+    try {
+      const current = await isAlbumSearchEnabled(env.DB);
+      await setAlbumSearchEnabled(env.DB, !current);
+    } catch (error) {
+      warn("admin: failed to toggle album search", error);
       await safeAnswer(ctx, "❌ Couldn't update the setting (database error).");
       return;
     }

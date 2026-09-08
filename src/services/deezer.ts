@@ -4,6 +4,7 @@ import { retryAsync } from "../utils/retry";
 import { fetchWithTimeout } from "../utils/fetch";
 
 const DEEZER_SEARCH_URL = "https://api.deezer.com/search";
+const DEEZER_ALBUM_SEARCH_URL = "https://api.deezer.com/search/album";
 const DEEZER_TRACK_URL = "https://api.deezer.com/track/";
 const DEEZER_ALBUM_URL = "https://api.deezer.com/album/";
 
@@ -105,6 +106,32 @@ export async function searchTracks(query: string, limit = 25) {
       .join("; ");
     const extra = results.length > 5 ? ` (+${results.length - 5} more)` : "";
     log(`Deezer search: ${results.length} result(s) for`, JSON.stringify(query), `→ ${top}${extra}`);
+  }
+  return results;
+}
+
+// Album search for the admin /album picker: results carry id, title,
+// artist.name, cover_medium/cover_xl and nb_tracks.
+export async function searchAlbums(query: string, limit = 8) {
+  log("Deezer album search:", JSON.stringify(query), `limit=${limit}`);
+  const data = await deezerFetchJson(
+    `${DEEZER_ALBUM_SEARCH_URL}?q=${encodeURIComponent(query)}`,
+    "searchAlbums",
+  );
+  if (!data) {
+    log("Deezer album search failed (null response) for:", JSON.stringify(query));
+    return null;
+  }
+  const results = (data.data ?? []).slice(0, limit);
+  if (!results.length) {
+    log("Deezer album search: 0 results for:", JSON.stringify(query));
+  } else {
+    const top = results
+      .slice(0, 5)
+      .map((a: any) => `${a?.title ?? "?"} — ${a?.artist?.name ?? "?"}`)
+      .join("; ");
+    const extra = results.length > 5 ? ` (+${results.length - 5} more)` : "";
+    log(`Deezer album search: ${results.length} result(s) for`, JSON.stringify(query), `→ ${top}${extra}`);
   }
   return results;
 }

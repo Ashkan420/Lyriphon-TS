@@ -3,6 +3,7 @@ import type { InlineKeyboardMarkup, InputMediaAudio, InputRichMessage } from "@g
 import { formatDuration } from "./telegram";
 import { isValidImageUrl } from "./urlValidation";
 import { warn } from "./logger";
+import { DEEZLOAD_BOT } from "../config";
 
 // Rich-message helpers for the track pipeline (src/handlers/callbacks/search.ts).
 //
@@ -404,6 +405,57 @@ export interface RichAudioOpts {
   position?: RichPosition;
   color?: RichColor;
   coverUrl?: string;
+}
+
+// The assembled admin /album result: cover + credit on top, then one audio
+// player + Lyrics button per delivered track, with failed tracks as plain
+// deezload lines. The cover is a plain HTTP <img> (no media entry needed);
+// each player resolves its own media[] entry (trk1…trkN in order).
+export function buildAlbumRichMessage(options: {
+  albumTitle: string;
+  artistName: string;
+  coverUrl: string;
+  tracks: Array<{
+    trackName: string;
+    trackId: number;
+    telegraphUrl: string;
+    fileId?: string;
+  }>;
+  position?: RichPosition;
+  color?: RichColor;
+}): { html: string; media: Array<{ id: string; media: { type: "audio"; media: string } }> } {
+  const esc = escapeRichHtml;
+  const position = options.position ?? "center";
+  const color = options.color ?? "primary";
+  const styleAttr = color === "default" ? "" : ` style="${color}"`;
+
+  const media: Array<{ id: string; media: { type: "audio"; media: string } }> = [];
+  const sections: string[] = [
+    `<figure><img src="${esc(options.coverUrl)}"/>` +
+    `<figcaption>${esc(options.artistName)} — ${esc(options.albumTitle)}</figcaption></figure>`,
+    "<hr/>",
+  ];
+
+  options.tracks.forEach((track, i) => {
+    const name = esc(track.trackName);
+    if (track.fileId) {
+      const mediaId = `trk${i + 1}`;
+      media.push({ id: mediaId, media: { type: "audio", media: track.fileId } });
+      sections.push(
+        `<figure><audio src="tg://audio?id=${mediaId}"></audio>` +
+        `<figcaption>${name}</figcaption></figure>\n` +
+        `<tg-button-row align="${position}">` +
+        `<tg-button type="url"${styleAttr} url="${esc(track.telegraphUrl)}">Lyrics</tg-button>` +
+        `</tg-button-row>`,
+      );
+    } else {
+      sections.push(
+        `<p>🎵 ${name} — <a href="${DEEZLOAD_BOT}deezerttrack${track.trackId}">grab from deezload</a></p>`,
+      );
+    }
+  });
+
+  return { html: sections.join("\n"), media };
 }
 
 // Send the rich audio delivery. Returns the sent message, or null on any

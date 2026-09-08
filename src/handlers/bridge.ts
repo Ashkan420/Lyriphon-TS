@@ -35,6 +35,7 @@ import {
 } from "../db/settings";
 import { sendRichAudio } from "../utils/richMessages";
 import { resolveRichAudioOpts } from "../utils/telegram";
+import { assembleAlbumIfComplete } from "./album";
 import { AUTOFETCH_REQUEST_TTL_SECONDS } from "../config";
 import { setTrackFileId } from "../db/tracks";
 import { getUserChannels } from "../db/channels";
@@ -153,6 +154,21 @@ async function deliverFile(env: Env, audio: any, token: string): Promise<void> {
   const row = await lookupPendingRow(env, token);
   if (!row) return;
 
+  // Album-batch rows skip the DM delivery entirely: the file only lands in
+  // the final assembled album rich message. Store the file_id (the assembly
+  // reads it from the tracks store), flip the row, and nudge assembly.
+  if (row.album_token) {
+    await setRequestStatus(env.DB, token, "delivered");
+    try {
+      await setTrackFileId(env.DB, row.track_id, audio.file_id);
+    } catch (error) {
+      warn("bridge: album delivery failed to store track file_id", error);
+    }
+    await assembleAlbumIfComplete(env, row.album_token);
+    log("bridge: album track delivered", JSON.stringify({ token, trackId: row.track_id }));
+    return;
+  }
+
   const trackName = row.track_title ?? "Unknown Track";
   const artistName = row.artist_name ?? "Unknown Artist";
   const caption = row.telegraph_url
@@ -249,6 +265,14 @@ async function reportFailure(env: Env, token: string): Promise<void> {
   if (!row) return;
 
   await setRequestStatus(env.DB, token, "failed");
+
+  // Album rows fail silently into the assembly (deezload-note line); no DM
+  // notify, no inline edit.
+  if (row.album_token) {
+    await assembleAlbumIfComplete(env, row.album_token);
+    return;
+  }
+
   await deleteQueuedMsg(env, row);
 
   // Inline rows have no requester chat — surface the failure on the message.

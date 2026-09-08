@@ -34,6 +34,7 @@ function row(overrides: Partial<AudioRequestRow> = {}): AudioRequestRow {
     telegraph_url: "https://telegra.ph/abc",
     queued_msg_id: null,
     inline_message_id: null,
+    album_token: null,
     status: "pending",
     created_at: now - 60,
     updated_at: now - 60,

@@ -61,6 +61,19 @@ export async function setAutoFetchEnabled(db: D1Database, enabled: boolean): Pro
   await setSetting(db, SETTING_AUTOFETCH_ENABLED, enabled ? "1" : "0");
 }
 
+// Admin-only album search (/album): builds a rich message with every track
+// on an album, fetching each file through the bridge. Default off (fail
+// closed), toggled from the /admin panel.
+export const SETTING_ALBUM_SEARCH_ENABLED = "album_search_enabled";
+
+export async function isAlbumSearchEnabled(db: D1Database): Promise<boolean> {
+  return (await getSetting(db, SETTING_ALBUM_SEARCH_ENABLED)) === "1";
+}
+
+export async function setAlbumSearchEnabled(db: D1Database, enabled: boolean): Promise<void> {
+  await setSetting(db, SETTING_ALBUM_SEARCH_ENABLED, enabled ? "1" : "0");
+}
+
 // Experimental rich-message music delivery: audio + Lyrics button inside one
 // rich message instead of sendAudio + reply_markup. Two-layer gate like
 // auto-fetch — global admin switch AND per-user pref — but both default OFF

@@ -22,4 +22,8 @@ export const AUTOFETCH_REQUEST_TTL_SECONDS = 7200;
 // watchdog fails jobs that exceed it.
 export const AUTOFETCH_JOB_TIMEOUT_MS = 240000;
 // Max jobs waiting in BridgeDO's FIFO before new enqueues are rejected.
-export const AUTOFETCH_MAX_QUEUE = 10;
+// Sized for album batches (up to ALBUM_MAX_TRACKS tracks in one run).
+export const AUTOFETCH_MAX_QUEUE = 30;
+
+// Admin-only album search: max tracks pulled per album run.
+export const ALBUM_MAX_TRACKS = 20;

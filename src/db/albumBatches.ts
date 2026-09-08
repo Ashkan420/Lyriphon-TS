@@ -1,0 +1,120 @@
+// Album batch state for the admin-only /album pipeline. One row per album
+// run; the per-track jobs live in audio_requests (album_token column links
+// them here). The batch row is what assembly reads to know where to send
+// the final album rich message, and its status column is the double-send
+// guard (pending → complete via a guarded UPDATE; the winner assembles).
+
+export type AlbumBatchStatus = "pending" | "complete";
+
+export type AlbumBatchRow = {
+  batch_token: string;
+  user_id: string;
+  chat_id: number;
+  album_id: number;
+  title: string;
+  artist: string;
+  cover_url: string;
+  release_date: string;
+  track_count: number;
+  status: AlbumBatchStatus;
+  album_msg_id: number | null;
+  created_at: number;
+  updated_at: number;
+};
+
+let tableReady = false;
+
+async function ensureTable(db: D1Database) {
+  if (tableReady) return;
+  try {
+    await db.prepare("SELECT 1 FROM album_batches LIMIT 1").all();
+    tableReady = true;
+  } catch {
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS album_batches (
+        batch_token TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        chat_id INTEGER NOT NULL,
+        album_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        artist TEXT NOT NULL,
+        cover_url TEXT,
+        release_date TEXT,
+        track_count INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        album_msg_id INTEGER,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      )
+    `).run();
+    await db.prepare("CREATE INDEX IF NOT EXISTS idx_album_batches_user ON album_batches(user_id, status)").run();
+    tableReady = true;
+  }
+}
+
+export async function createAlbumBatch(
+  db: D1Database,
+  data: {
+    batchToken: string;
+    userId: string;
+    chatId: number;
+    albumId: number;
+    title: string;
+    artist: string;
+    coverUrl: string;
+    releaseDate: string;
+    trackCount: number;
+  },
+): Promise<void> {
+  await ensureTable(db);
+  await db.prepare(`
+    INSERT INTO album_batches (batch_token, user_id, chat_id, album_id, title, artist, cover_url, release_date, track_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+    .bind(data.batchToken, data.userId, data.chatId, data.albumId, data.title, data.artist, data.coverUrl, data.releaseDate, data.trackCount)
+    .run();
+}
+
+export async function getAlbumBatch(db: D1Database, batchToken: string): Promise<AlbumBatchRow | null> {
+  await ensureTable(db);
+  const row = await db.prepare(`
+    SELECT batch_token, user_id, chat_id, album_id, title, artist, cover_url, release_date,
+           track_count, status, album_msg_id, created_at, updated_at
+    FROM album_batches WHERE batch_token = ?
+  `)
+    .bind(batchToken)
+    .first<AlbumBatchRow>();
+  return row ?? null;
+}
+
+export async function hasPendingBatchForUser(db: D1Database, userId: string): Promise<boolean> {
+  await ensureTable(db);
+  const row = await db.prepare(`
+    SELECT batch_token FROM album_batches WHERE user_id = ? AND status = 'pending' LIMIT 1
+  `)
+    .bind(userId)
+    .first<{ batch_token: string }>();
+  return Boolean(row);
+}
+
+// The double-send guard: exactly one caller flips pending → complete and
+// proceeds to assemble. Returns false for a loser (already assembled).
+export async function markBatchComplete(db: D1Database, batchToken: string): Promise<boolean> {
+  await ensureTable(db);
+  const result = await db.prepare(`
+    UPDATE album_batches SET status = 'complete', updated_at = unixepoch()
+    WHERE batch_token = ? AND status = 'pending'
+  `)
+    .bind(batchToken)
+    .run();
+  return (result?.meta?.changes ?? 0) > 0;
+}
+
+export async function setBatchAlbumMsg(db: D1Database, batchToken: string, messageId: number): Promise<void> {
+  await ensureTable(db);
+  await db.prepare(`
+    UPDATE album_batches SET album_msg_id = ?, updated_at = unixepoch() WHERE batch_token = ?
+  `)
+    .bind(messageId, batchToken)
+    .run();
+}

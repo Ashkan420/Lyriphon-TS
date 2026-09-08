@@ -21,6 +21,10 @@ export type AudioRequestRow = {
   // edit itself into (audio + Lyrics button) on delivery. DM requests stay
   // NULL; inline rows use chat_id 0.
   inline_message_id: string | null;
+  // Set for album-batch rows: links this job to its album_batches run.
+  // Album rows skip the normal DM delivery — the file only lands in the
+  // final assembled album rich message.
+  album_token: string | null;
   status: AudioRequestStatus;
   created_at: number;
   updated_at: number;
@@ -44,6 +48,12 @@ async function ensureTable(db: D1Database) {
     } catch {
       await db.prepare("ALTER TABLE audio_requests ADD COLUMN inline_message_id TEXT").run();
     }
+    // Table predates album_token — add it idempotently.
+    try {
+      await db.prepare("SELECT album_token FROM audio_requests LIMIT 1").all();
+    } catch {
+      await db.prepare("ALTER TABLE audio_requests ADD COLUMN album_token TEXT").run();
+    }
     tableReady = true;
   } catch {
     await db.prepare(`
@@ -58,6 +68,7 @@ async function ensureTable(db: D1Database) {
         telegraph_url TEXT,
         queued_msg_id INTEGER,
         inline_message_id TEXT,
+        album_token TEXT,
         status TEXT NOT NULL DEFAULT 'pending',
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
         updated_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -78,14 +89,15 @@ export async function createAudioRequest(
     trackTitle: string;
     artistName: string;
     inlineMessageId?: string;
+    albumToken?: string;
   },
 ): Promise<void> {
   await ensureTable(db);
   await db.prepare(`
-    INSERT INTO audio_requests (req_token, user_id, chat_id, track_id, track_title, artist_name, inline_message_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO audio_requests (req_token, user_id, chat_id, track_id, track_title, artist_name, inline_message_id, album_token)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `)
-    .bind(data.reqToken, data.userId, data.chatId, data.trackId, data.trackTitle, data.artistName, data.inlineMessageId ?? null)
+    .bind(data.reqToken, data.userId, data.chatId, data.trackId, data.trackTitle, data.artistName, data.inlineMessageId ?? null, data.albumToken ?? null)
     .run();
 }
 
@@ -93,12 +105,26 @@ export async function getRequestByToken(db: D1Database, reqToken: string): Promi
   await ensureTable(db);
   const row = await db.prepare(`
     SELECT id, req_token, user_id, chat_id, track_id, track_title, artist_name,
-           telegraph_url, queued_msg_id, inline_message_id, status, created_at, updated_at
+           telegraph_url, queued_msg_id, inline_message_id, album_token, status, created_at, updated_at
     FROM audio_requests WHERE req_token = ?
   `)
     .bind(reqToken)
     .first<AudioRequestRow>();
   return row ?? null;
+}
+
+// All rows of one album batch, in enqueue (id) order — the assembly reads
+// this to decide completeness and build the message.
+export async function getRequestsByAlbumToken(db: D1Database, albumToken: string): Promise<AudioRequestRow[]> {
+  await ensureTable(db);
+  const result = await db.prepare(`
+    SELECT id, req_token, user_id, chat_id, track_id, track_title, artist_name,
+           telegraph_url, queued_msg_id, inline_message_id, album_token, status, created_at, updated_at
+    FROM audio_requests WHERE album_token = ? ORDER BY id ASC
+  `)
+    .bind(albumToken)
+    .all<AudioRequestRow>();
+  return result.results ?? [];
 }
 
 export async function countPendingByUser(db: D1Database, userId: string): Promise<number> {

@@ -6,6 +6,7 @@ import {
   buildTrackResultHtml,
   buildRichAudioDelivery,
   buildRichOptionDemo,
+  buildAlbumRichMessage,
   sendRichAudio,
   TrackProgressReporter,
 } from "../src/utils/richMessages";
@@ -170,6 +171,77 @@ describe("buildRichOptionDemo", () => {
     expect(html).toContain('style="primary" data="richcol_primary"');
     expect(html).toContain('style="success" data="richcol_success"');
     expect(html).toContain('style="danger" data="richcol_danger"');
+  });
+});
+
+describe("buildAlbumRichMessage", () => {
+  const base = {
+    albumTitle: "2001",
+    artistName: "Dr. Dre",
+    coverUrl: "https://e-cdns.dzcdn.net/cover.jpg",
+    position: "center" as const,
+    color: "primary" as const,
+  };
+
+  it("cover + credit on top, one player + Lyrics button per delivered track", () => {
+    const { html, media } = buildAlbumRichMessage({
+      ...base,
+      tracks: [
+        { trackName: "Still D.R.E.", trackId: 1, telegraphUrl: "https://telegra.ph/a", fileId: "F1" },
+        { trackName: "The Next Episode", trackId: 2, telegraphUrl: "https://telegra.ph/b", fileId: "F2" },
+      ],
+    });
+    expect(html).toContain('<img src="https://e-cdns.dzcdn.net/cover.jpg"/>');
+    expect(html).toContain("<figcaption>Dr. Dre — 2001</figcaption>");
+    expect(html).toContain("<hr/>");
+    expect(html).toContain('tg://audio?id=trk1');
+    expect(html).toContain('tg://audio?id=trk2');
+    expect(html).toContain('<tg-button type="url" style="primary" url="https://telegra.ph/a">Lyrics</tg-button>');
+    expect(html).toContain('<tg-button type="url" style="primary" url="https://telegra.ph/b">Lyrics</tg-button>');
+    // Media entries in track order, referencing the file_ids.
+    expect(media).toEqual([
+      { id: "trk1", media: { type: "audio", media: "F1" } },
+      { id: "trk2", media: { type: "audio", media: "F2" } },
+    ]);
+  });
+
+  it("failed tracks render as deezload note lines, not players", () => {
+    const { html, media } = buildAlbumRichMessage({
+      ...base,
+      tracks: [
+        { trackName: "Okay", trackId: 11, telegraphUrl: "https://telegra.ph/ok", fileId: "F1" },
+        { trackName: "Broken", trackId: 22, telegraphUrl: "" },
+      ],
+    });
+    expect(html).toContain('tg://audio?id=trk1');
+    expect(html).toContain("🎵 Broken — ");
+    expect(html).toContain('href="https://t.me/deezload2bot?start=deezerttrack22"');
+    expect(html).not.toContain("trk2");
+    expect(media).toHaveLength(1);
+  });
+
+  it("applies position and color knobs; default color omits the style attr", () => {
+    const { html } = buildAlbumRichMessage({
+      ...base,
+      position: "right",
+      color: "default",
+      tracks: [{ trackName: "A", trackId: 1, telegraphUrl: "https://telegra.ph/a", fileId: "F1" }],
+    });
+    expect(html).toContain('<tg-button-row align="right">');
+    expect(html).not.toContain('style="default"');
+    expect(html).toContain('<tg-button type="url" url="https://telegra.ph/a">Lyrics</tg-button>');
+  });
+
+  it("escapes names and URLs", () => {
+    const { html } = buildAlbumRichMessage({
+      albumTitle: 'A & B <C>',
+      artistName: "D>E",
+      coverUrl: "https://c/1.jpg",
+      tracks: [{ trackName: 'X "Y" & Z', trackId: 1, telegraphUrl: "https://telegra.ph/x?a=1&b=2", fileId: "F" }],
+    });
+    expect(html).toContain("<figcaption>D&gt;E — A &amp; B &lt;C&gt;</figcaption>");
+    expect(html).toContain("<figcaption>X &quot;Y&quot; &amp; Z</figcaption>");
+    expect(html).toContain('url="https://telegra.ph/x?a=1&amp;b=2"');
   });
 });
 
