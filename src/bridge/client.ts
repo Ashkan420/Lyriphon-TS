@@ -19,7 +19,7 @@ import { StringSession } from "teleproto/sessions";
 import { ConnectionTCPFull } from "teleproto/network/connection";
 import { Raw } from "teleproto/events/Raw";
 import { WorkersTcpSocket } from "./socket";
-import { log } from "../utils/logger";
+import { log, warn } from "../utils/logger";
 
 export const DEEZLOAD_USERNAME = "deezload2bot";
 
@@ -450,15 +450,17 @@ export class BridgeJobs {
     // Deezload's album view is a fast, cached reply — the event listener
     // MUST be armed before the /start lands, or the view is missed and the
     // job silently waits out its timeout.
-    const viewPromise = this.waitForAlbumView(client, deezload, albumId);
     const audioPromise = this.collectAlbumAudio(client, albumId);
 
-    await client.sendMessage(deezload, {
+    const sent = await client.sendMessage(deezload, {
       message: `/start deezertalbum${albumId}`,
       linkPreview: false,
     });
 
-    const view = await viewPromise;
+    // Only a view NEWER than our /start is acceptable — older views for the
+    // same album (from earlier runs, possibly pressed manually) sit in
+    // recent history and would fail the callback on an expired message.
+    const view = await this.waitForAlbumView(client, deezload, albumId, sent.id);
     if (!view) {
       audioPromise.catch(() => {});
       throw new Error(`no album view from deezload for album ${albumId}`);
@@ -475,15 +477,23 @@ export class BridgeJobs {
         `(buttons: ${buttons.map((b) => `"${b.text}"`).join(", ") || "none"})`,
       );
     }
-    await client.invoke(
-      new Api.messages.GetBotCallbackAnswer({
-        peer: deezload,
-        msgId: view.id,
-        // The button's data is already the exact TL bytes to echo back.
-        data: target.data as any,
-      }),
-    );
-    log(`bridge: pressed GET ALL for album ${albumId}`);
+    try {
+      await client.invoke(
+        new Api.messages.GetBotCallbackAnswer({
+          peer: deezload,
+          msgId: view.id,
+          // The button's data is already the exact TL bytes to echo back.
+          data: target.data as any,
+        }),
+      );
+      log(`bridge: pressed GET ALL for album ${albumId}`);
+    } catch (error) {
+      // The answer RPC can time out (deezload is busy preparing the album
+      // and answers the callback slowly) while still acting on the press —
+      // bots commonly process clicks after the ~10s MTProto answer window.
+      // Treat the press as best-effort: the audio stream is the real signal.
+      warn(`bridge: GET ALL answer for album ${albumId} errored (press may still have landed)`, error);
+    }
 
     // Detach the audio collector's rejection path: any failure below must
     // not leave it dangling as an unhandled rejection.
@@ -516,13 +526,29 @@ export class BridgeJobs {
     return audios.length;
   }
 
-  // The album view is the first message deezload posts after /start that
-  // carries any inline keyboard (photo+buttons or text+buttons). The live
-  // listener is armed BEFORE the /start lands (cached views can beat a
-  // late-registered listener); a periodic getMessages poll is the backstop
-  // for view updates the live stream misses. Resolves null on timeout so
-  // the caller can poll-fail gracefully.
-  private async waitForAlbumView(client: TelegramClient, deezload: any, albumId: number): Promise<Api.Message | null> {
+  // The album view is the message whose keyboard actually contains the GET
+  // ALL button for this album (data prefix `album/<id>/down`) — NOT just any
+  // keyboard: deezload's DM keeps stale views from earlier runs and menus,
+  // and a loose matcher presses/waits on the wrong message. The live
+  // listener is armed BEFORE the /start lands; a periodic getMessages poll
+  // is the backstop for updates the live stream misses. Resolves null on
+  // timeout so the caller can fail gracefully.
+  private async waitForAlbumView(
+    client: TelegramClient,
+    deezload: any,
+    albumId: number,
+    afterMsgId: number,
+  ): Promise<Api.Message | null> {
+    const hasGetAll = (msg: any): boolean => {
+      const rows = msg?.replyMarkup?.rows;
+      if (!Array.isArray(rows)) return false;
+      return this.collectCallbackButtons(msg as Api.Message).some(
+        (b) => b.data && bytesStartsWith(b.data, `album/${albumId}/down`),
+      );
+    };
+    const isNewer = (msg: any): boolean =>
+      typeof msg?.id === "number" && msg.id > afterMsgId;
+
     return new Promise<Api.Message | null>((resolve) => {
       let settled = false;
       let poll: ReturnType<typeof setInterval> | undefined;
@@ -538,30 +564,28 @@ export class BridgeJobs {
         if (settled) return;
         const msg = update?.message;
         if (!msg || typeof msg.id !== "number") return;
-        const rows = (msg.replyMarkup as any)?.rows;
-        if (!Array.isArray(rows) || !rows.length) {
-          return; // not the view
+        if (!isNewer(msg) || !hasGetAll(msg)) {
+          return; // a menu / stale view / status text — keep waiting
         }
         settled = true;
         cleanup();
+        log(`bridge: album ${albumId} view received (msg ${msg.id})`);
         resolve(msg as Api.Message);
       };
 
       const raw = new Raw({});
       client.addEventHandler(handler, raw);
 
-      // Backstop poll: scan recent deezload messages for a keyboard, in
-      // case the NewMessage update never reaches the live handler.
       poll = setInterval(() => {
         void (async () => {
           if (settled) return;
           try {
             const msgs = await client.getMessages(deezload, { limit: 5 });
             for (const m of msgs) {
-              const rows = (m as any).replyMarkup?.rows;
-              if (Array.isArray(rows) && rows.length) {
+              if (isNewer(m) && hasGetAll(m)) {
                 settled = true;
                 cleanup();
+                log(`bridge: album ${albumId} view found by poll (msg ${(m as any).id})`);
                 resolve(m as unknown as Api.Message);
                 return;
               }

@@ -327,7 +327,7 @@ export class BridgeDO {
         const batch = await getAlbumBatch(this.env.DB, token);
         if (batch && batch.status === "pending") {
           const { failAlbumBatch } = await import("./handlers/album");
-          await failAlbumBatch(this.env, token);
+          await failAlbumBatch(this.env, token, reason);
           log("BridgeDO: album job failed, batch failed", JSON.stringify({ token, reason }));
         }
         return;

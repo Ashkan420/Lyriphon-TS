@@ -719,7 +719,7 @@ export async function finishAlbumStream(env: Env, batchToken: string, count: num
 
 // Called by the bridge when the album job fails outright (lyq:fail): every
 // selected pending row failed.
-export async function failAlbumBatch(env: Env, batchToken: string): Promise<void> {
+export async function failAlbumBatch(env: Env, batchToken: string, reason?: string): Promise<void> {
   try {
     const batch = await getAlbumBatch(env.DB, batchToken);
     if (!batch || batch.status !== "pending") {
@@ -730,6 +730,20 @@ export async function failAlbumBatch(env: Env, batchToken: string): Promise<void
     for (const row of rows) {
       if (row.status === "pending" && selectedIds.has(row.track_id)) {
         await setRequestStatus(env.DB, row.req_token, "failed");
+      }
+    }
+    // Put the reason on the status message so the admin sees WHY, not just
+    // "0 of N".
+    if (reason && batch.status_msg_id) {
+      try {
+        const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
+        await api.editMessageText(
+          batch.chat_id,
+          batch.status_msg_id,
+          `❌ Album fetch failed: ${reason.slice(0, 300)}`,
+        );
+      } catch {
+        // edit races fine
       }
     }
     await onAlbumProgress(env, batchToken);
