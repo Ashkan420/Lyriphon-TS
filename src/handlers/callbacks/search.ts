@@ -3,7 +3,7 @@ import { getTrack, getAlbum } from "../../services/deezer";
 import { getLyrics } from "../../services/lrclib";
 import { createSongTelegraph } from "../../services/telegraph";
 import { getTrackRecord, upsertTrack, setTrackFileId } from "../../db/tracks";
-import { safeAnswer, safeDelete, attachAudioAndPromptChannel } from "../../utils/telegram";
+import { safeAnswer, safeDelete, attachAudioAndPromptChannel, resolveRichAudioOpts } from "../../utils/telegram";
 import { normalizeLyrics } from "../../utils/lyrics";
 import {
   TrackProgressReporter,
@@ -337,6 +337,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   // telegraph stays live so the user can still send another file to replace.
   if (autoGetForUser && !hasAudio && trackRecord?.file_id) {
     log("track pipeline: reusing stored audio for track", trackId);
+    const richOpts = await resolveRichAudioOpts(env.DB, requesterId, trackId, albumCoverUrl, albumId);
     const caption = await attachAudioAndPromptChannel(
       ctx.api,
       env.DB,
@@ -347,6 +348,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
       telegraphResult.url,
       trackName,
       artistName,
+      richOpts,
     );
     if (caption) {
       clearAudioState(session);
@@ -355,6 +357,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
 
   // Attach audio and prompt channel AFTER sending Telegraph result
   if (hasAudio && pendingAudioFileId) {
+    const richOpts = await resolveRichAudioOpts(env.DB, String(ctx.from?.id ?? ""), trackId, albumCoverUrl, albumId);
     const caption = await attachAudioAndPromptChannel(
       ctx.api,
       env.DB,
@@ -365,6 +368,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
       telegraphResult.url,
       trackName,
       artistName,
+      richOpts,
     );
 
     if (!caption) {

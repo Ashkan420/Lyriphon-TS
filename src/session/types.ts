@@ -20,6 +20,9 @@ export interface AudioFlowData extends BaseFlowData {
   pendingFileId?: string;
   pendingCaption?: string;
   pendingTelegraphUrl?: string;
+  // Track/artist of the pending delivery, for the channel-send rich path.
+  pendingTrackName?: string;
+  pendingArtistName?: string;
   sendChannelPromptId?: number;
 }
 

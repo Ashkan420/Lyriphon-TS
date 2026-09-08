@@ -61,6 +61,53 @@ export async function setAutoFetchEnabled(db: D1Database, enabled: boolean): Pro
   await setSetting(db, SETTING_AUTOFETCH_ENABLED, enabled ? "1" : "0");
 }
 
+// Experimental rich-message music delivery: audio + Lyrics button inside one
+// rich message instead of sendAudio + reply_markup. Two-layer gate like
+// auto-fetch — global admin switch AND per-user pref — but both default OFF
+// (opt-in): a missing row means the user gets the plain delivery.
+export const SETTING_RICH_DELIVERY_ENABLED = "rich_delivery_enabled";
+export const SETTING_USER_RICH_PREFIX = "pref_rich:";
+
+export async function isRichDeliveryEnabled(db: D1Database): Promise<boolean> {
+  return (await getSetting(db, SETTING_RICH_DELIVERY_ENABLED)) === "1";
+}
+
+export async function setRichDeliveryEnabled(db: D1Database, enabled: boolean): Promise<void> {
+  await setSetting(db, SETTING_RICH_DELIVERY_ENABLED, enabled ? "1" : "0");
+}
+
+export async function isUserRichDeliveryEnabled(db: D1Database, userId: string): Promise<boolean> {
+  return (await getSetting(db, `${SETTING_USER_RICH_PREFIX}${userId}`)) === "1";
+}
+
+export async function setUserRichDeliveryEnabled(db: D1Database, userId: string, enabled: boolean): Promise<void> {
+  await setSetting(db, `${SETTING_USER_RICH_PREFIX}${userId}`, enabled ? "1" : "0");
+}
+
+// Per-user rich layout choice ("1".."4"). Missing/garbage row = style 1, so
+// users who never open the picker keep the original delivery look.
+export const SETTING_USER_RICHSTYLE_PREFIX = "pref_richstyle:";
+
+export async function getUserRichStyle(db: D1Database, userId: string): Promise<1 | 2 | 3 | 4> {
+  const raw = await getSetting(db, `${SETTING_USER_RICHSTYLE_PREFIX}${userId}`);
+  return raw === "2" || raw === "3" || raw === "4" ? (Number(raw) as 1 | 2 | 3 | 4) : 1;
+}
+
+export async function setUserRichStyle(db: D1Database, userId: string, style: 1 | 2 | 3 | 4): Promise<void> {
+  const clamped = style === 2 || style === 3 || style === 4 ? style : 1;
+  await setSetting(db, `${SETTING_USER_RICHSTYLE_PREFIX}${userId}`, String(clamped));
+}
+
+// The effective gate all delivery sites use. D1 failure degrades to plain
+// delivery (fail closed) rather than blocking the send.
+export async function isRichDeliveryActive(db: D1Database, userId: string): Promise<boolean> {
+  try {
+    return (await isRichDeliveryEnabled(db)) && (await isUserRichDeliveryEnabled(db, userId));
+  } catch {
+    return false;
+  }
+}
+
 // ── Per-user preferences ────────────────────────────────────────────────────
 //
 // Stored on the same KV, keyed by user id. Defaults live in the getters so a

@@ -10,6 +10,9 @@ import { searchTracks } from "../../services/deezer";
 import { chatId } from "./index";
 import { takePendingSend, clearPendingSend } from "../bridge";
 import { setTrackFileId } from "../../db/tracks";
+import { isRichDeliveryActive, getUserRichStyle } from "../../db/settings";
+import { sendRichAudio, RichAudioOpts } from "../../utils/richMessages";
+import { resolveRichAudioOpts, fetchCoverUrl } from "../../utils/telegram";
 
 export async function handleAudioDecisionCallback(ctx: Context, session: SessionData, env: Env) {
   const data = ctx.callbackQuery?.data;
@@ -39,6 +42,12 @@ export async function handleAudioDecisionCallback(ctx: Context, session: Session
     const trackName = lastData.track ?? "Unknown Track";
     const artistName = lastData.artist ?? "Unknown Artist";
 
+    const richOpts = await resolveRichAudioOpts(
+      env.DB,
+      String(ctx.from?.id ?? ""),
+      typeof lastData.trackId === "number" ? lastData.trackId : undefined,
+      lastData.albumCoverUrl,
+    );
     const caption = await attachAudioAndPromptChannel(
       ctx.api,
       env.DB,
@@ -49,6 +58,7 @@ export async function handleAudioDecisionCallback(ctx: Context, session: Session
       telegraphUrl,
       trackName,
       artistName,
+      richOpts,
     );
     if (!caption) {
       return;
@@ -112,6 +122,9 @@ export async function handleSendToChannelCallback(ctx: Context, session: Session
   let audioFileId = session.audio.pendingFileId;
   let caption = session.audio.pendingCaption;
   let telegraphUrl = session.audio.pendingTelegraphUrl;
+  let trackName = session.audio.pendingTrackName;
+  let artistName = session.audio.pendingArtistName;
+  let trackId: number | undefined = (session.telegraph.data as any)?.trackId;
 
   // Bridge deliveries bypass the requester's SessionDO, so session fields
   // are empty for them — fall back to the D1 pending-send stash.
@@ -121,6 +134,9 @@ export async function handleSendToChannelCallback(ctx: Context, session: Session
       audioFileId = stashed.fileId;
       caption = stashed.caption;
       telegraphUrl = stashed.telegraphUrl ?? undefined;
+      trackName = stashed.trackName ?? trackName;
+      artistName = stashed.artistName ?? artistName;
+      trackId = stashed.trackId ?? trackId;
     }
   }
 
@@ -142,6 +158,36 @@ export async function handleSendToChannelCallback(ctx: Context, session: Session
     return;
   }
 
+  // Experimental rich delivery: names are required (they feed the caption);
+  // without them — e.g. a pre-rich stash — go straight to the plain send.
+  const senderId = String(ctx.from?.id ?? "");
+  if (trackName && artistName && (await isRichDeliveryActive(env.DB, senderId))) {
+    const style = await getUserRichStyle(env.DB, senderId);
+    let richOpts: RichAudioOpts = { style };
+    if (style === 2 || style === 3) {
+      const sessionCover = (session.telegraph.data as any)?.albumCoverUrl;
+      if (sessionCover) {
+        richOpts.coverUrl = sessionCover;
+      } else if (trackId) {
+        richOpts.coverUrl = await fetchCoverUrl(trackId);
+      }
+    } else if (style === 4 && trackId) {
+      richOpts.deezerUrl = `https://www.deezer.com/track/${trackId}`;
+    }
+    const richOk = await sendRichAudio(ctx.api, Number(channelId), audioFileId, trackName, artistName, telegraphUrl, richOpts);
+    if (richOk) {
+      await ctx.editMessageText("✅ Sent to channel!");
+      session.audio.pendingFileId = undefined;
+      session.audio.pendingCaption = undefined;
+      session.audio.pendingTelegraphUrl = undefined;
+      session.audio.pendingTrackName = undefined;
+      session.audio.pendingArtistName = undefined;
+      session.audio.sendChannelPromptId = undefined;
+      await clearPendingSend(env, String(ctx.from?.id ?? ""));
+      return;
+    }
+  }
+
   const button = { inline_keyboard: [[{ text: "Lyrics", url: telegraphUrl }]] };
   try {
     await ctx.api.sendAudio(channelId, audioFileId, {
@@ -159,6 +205,8 @@ export async function handleSendToChannelCallback(ctx: Context, session: Session
   session.audio.pendingFileId = undefined;
   session.audio.pendingCaption = undefined;
   session.audio.pendingTelegraphUrl = undefined;
+  session.audio.pendingTrackName = undefined;
+  session.audio.pendingArtistName = undefined;
   session.audio.sendChannelPromptId = undefined;
   await clearPendingSend(env, String(ctx.from?.id ?? ""));
 }

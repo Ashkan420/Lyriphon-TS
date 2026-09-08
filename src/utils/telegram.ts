@@ -7,6 +7,10 @@ import { transition } from "../session/transitions";
 import { resetFlow } from "../session/flows";
 import { escapeMd as escapeMdUtil } from "./escapeMd";
 import { log, warn } from "./logger";
+import { isRichDeliveryActive, getUserRichStyle } from "../db/settings";
+import { sendRichAudio, RichAudioOpts } from "./richMessages";
+import { getTrack } from "../services/deezer";
+import { DEEZLOAD_BOT } from "../config";
 import type { InlineKeyboardMarkup } from "@grammyjs/types";
 
 export function formatDuration(seconds: number): string {
@@ -152,6 +156,49 @@ export function buildAudioCaption(trackName: string, artistName: string, telegra
   return `>\`${trackNameMd} — ${artistNameMd}\`${hiddenLink}`;
 }
 
+// Fetch an album cover URL from Deezer for rich styles 2/3. Returns
+// undefined on any failure — the style engine degrades to the no-cover body.
+export async function fetchCoverUrl(trackId: number): Promise<string | undefined> {
+  try {
+    const t = (await getTrack(trackId)) as any;
+    return t?.album?.cover_xl ?? t?.album?.cover_big ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Resolve the user's rich-style options for a real delivery: read the style
+// pref, and only fetch the Deezer cover when the chosen layout needs it
+// (styles 2/3). Everything degrades to undefined on failure — style engine
+// then renders the style-1 body.
+export async function resolveRichAudioOpts(
+  db: D1Database,
+  userId: string,
+  trackId: number | undefined,
+  coverUrl?: string,
+  albumId?: number,
+): Promise<RichAudioOpts> {
+  let style: 1 | 2 | 3 | 4 = 1;
+  try {
+    style = await getUserRichStyle(db, userId);
+  } catch {
+    // fail closed to style 1
+  }
+  const opts: RichAudioOpts = { style };
+  if (style === 2 || style === 3) {
+    if (coverUrl) {
+      opts.coverUrl = coverUrl;
+    } else if (trackId) {
+      opts.coverUrl = await fetchCoverUrl(trackId);
+    }
+  } else if (style === 4 && albumId) {
+    // deezload album link — the bot also accepts track targets, but the
+    // album entry point fetches the whole release in one go.
+    opts.deezerUrl = `${DEEZLOAD_BOT}deezertalbum${albumId}`;
+  }
+  return opts;
+}
+
 export async function attachAudioAndPromptChannel(
   bot: Api<RawApi>,
   db: D1Database,
@@ -162,8 +209,26 @@ export async function attachAudioAndPromptChannel(
   telegraphUrl: string,
   trackName: string,
   artistName: string,
+  richOpts?: RichAudioOpts,
 ) {
   const caption = buildAudioCaption(trackName, artistName, telegraphUrl);
+
+  // Experimental rich delivery: one rich message (audio + Lyrics tg-button in
+  // the body, no reply_markup). Falls back to the plain sendAudio below when
+  // the toggle is off or the rich send fails.
+  if (await isRichDeliveryActive(db, userId)) {
+    const opts = richOpts ?? (await resolveRichAudioOpts(db, userId, undefined, undefined));
+    const richOk = await sendRichAudio(bot, chatId, fileId, trackName, artistName, telegraphUrl, opts);
+    if (richOk) {
+      session.audio.pendingFileId = fileId;
+      session.audio.pendingCaption = caption;
+      session.audio.pendingTelegraphUrl = telegraphUrl;
+      session.audio.pendingTrackName = trackName;
+      session.audio.pendingArtistName = artistName;
+      await promptUserChannels(bot, db, chatId, userId, session);
+      return caption;
+    }
+  }
 
   try {
     await bot.sendAudio(chatId, fileId, {
@@ -179,7 +244,23 @@ export async function attachAudioAndPromptChannel(
   session.audio.pendingFileId = fileId;
   session.audio.pendingCaption = caption;
   session.audio.pendingTelegraphUrl = telegraphUrl;
+  session.audio.pendingTrackName = trackName;
+  session.audio.pendingArtistName = artistName;
 
+  await promptUserChannels(bot, db, chatId, userId, session);
+
+  return caption;
+}
+
+// The "Send to which channel?" prompt after a DM audio delivery. Shared by
+// the rich and plain paths; never breaks delivery on failure.
+async function promptUserChannels(
+  bot: Api<RawApi>,
+  db: D1Database,
+  chatId: number,
+  userId: string,
+  session: SessionData,
+): Promise<void> {
   try {
     const channels = await getUserChannels(db, userId);
     if (channels.length) {
@@ -194,8 +275,6 @@ export async function attachAudioAndPromptChannel(
   } catch (error) {
     warn("Failed to fetch user channels (table may not exist)", error);
   }
-
-  return caption;
 }
 
 export async function cancelEdit(bot: Api<RawApi>, chatId: number, session: SessionData) {

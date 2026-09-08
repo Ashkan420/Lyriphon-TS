@@ -4,7 +4,7 @@ import { SessionDO } from "../do";
 import { SessionData } from "../session/types";
 import { formatLogPage, warn } from "../utils/logger";
 import { safeAnswer } from "../utils/telegram";
-import { isAutoFetchEnabled, setAutoFetchEnabled } from "../db/settings";
+import { isAutoFetchEnabled, setAutoFetchEnabled, isRichDeliveryEnabled, setRichDeliveryEnabled } from "../db/settings";
 import { buildLogsNavRow } from "./callbacks/logs";
 import { openBrowserHomeFromAdmin } from "./dbAdmin";
 
@@ -29,13 +29,19 @@ export function isBotOwner(ctx: Context, env: Env): boolean {
   return String(ctx.from?.id) === env.BOT_OWNER_ID;
 }
 
-export function adminSettingsText(debugOn: boolean, multilingualOn: boolean, autofetchOn: boolean): string {
+export function adminSettingsText(
+  debugOn: boolean,
+  multilingualOn: boolean,
+  autofetchOn: boolean,
+  richOn: boolean,
+): string {
   return [
     "⚙️ <b>Admin settings</b>",
     "",
     `Debug: <b>${debugOn ? "on" : "off"}</b>`,
     `Multilingual: <b>${multilingualOn ? "on" : "off"}</b>`,
     `Auto-fetch: <b>${autofetchOn ? "on" : "off"}</b>`,
+    `Rich delivery: <b>${richOn ? "on" : "off"}</b>`,
     "",
     "Tap a toggle to switch it. Logs is available while debug is on.",
   ].join("\n");
@@ -45,6 +51,7 @@ export function buildAdminKeyboard(
   debugOn: boolean,
   multilingualOn: boolean,
   autofetchOn: boolean,
+  richOn: boolean,
 ): AdminButton[][] {
   const rows: AdminButton[][] = [
     [
@@ -66,6 +73,13 @@ export function buildAdminKeyboard(
         text: autofetchOn ? "🎧 Auto-fetch: ON" : "🎧 Auto-fetch: OFF",
         callback_data: "admin_toggle_autofetch",
         style: autofetchOn ? "success" : "danger",
+      },
+    ],
+    [
+      {
+        text: richOn ? "🎨 Rich delivery: ON" : "🎨 Rich delivery: OFF",
+        callback_data: "admin_toggle_rich",
+        style: richOn ? "success" : "danger",
       },
     ],
   ];
@@ -93,10 +107,11 @@ async function renderAdminSettings(
   const debugOn = sessionDo.debugEnabled;
   const multiOn = multilingualEnabled(session);
   const autoOn = await readAutoFetchEnabled(env);
+  const richOn = await readRichDeliveryEnabled(env);
   try {
-    await ctx.editMessageText(adminSettingsText(debugOn, multiOn, autoOn), {
+    await ctx.editMessageText(adminSettingsText(debugOn, multiOn, autoOn, richOn), {
       parse_mode: "HTML",
-      reply_markup: { inline_keyboard: buildAdminKeyboard(debugOn, multiOn, autoOn) },
+      reply_markup: { inline_keyboard: buildAdminKeyboard(debugOn, multiOn, autoOn, richOn) },
     });
   } catch {
     // Ignore "message is not modified" and similar edit races.
@@ -131,6 +146,15 @@ async function readAutoFetchEnabled(env: Env): Promise<boolean> {
   }
 }
 
+async function readRichDeliveryEnabled(env: Env): Promise<boolean> {
+  try {
+    return await isRichDeliveryEnabled(env.DB);
+  } catch (error) {
+    warn("admin: failed to read rich delivery setting", error);
+    return false;
+  }
+}
+
 export async function adminCommand(
   ctx: Context,
   session: SessionData,
@@ -140,9 +164,10 @@ export async function adminCommand(
   const debugOn = sessionDo.debugEnabled;
   const multiOn = multilingualEnabled(session);
   const autoOn = await readAutoFetchEnabled(env);
-  await ctx.reply(adminSettingsText(debugOn, multiOn, autoOn), {
+  const richOn = await readRichDeliveryEnabled(env);
+  await ctx.reply(adminSettingsText(debugOn, multiOn, autoOn, richOn), {
     parse_mode: "HTML",
-    reply_markup: { inline_keyboard: buildAdminKeyboard(debugOn, multiOn, autoOn) },
+    reply_markup: { inline_keyboard: buildAdminKeyboard(debugOn, multiOn, autoOn, richOn) },
   });
 }
 
@@ -185,6 +210,19 @@ export async function handleAdminCallback(
       await setAutoFetchEnabled(env.DB, !current);
     } catch (error) {
       warn("admin: failed to toggle autofetch", error);
+      await safeAnswer(ctx, "❌ Couldn't update the setting (database error).");
+      return;
+    }
+    await renderAdminSettings(ctx, session, sessionDo, env);
+    return;
+  }
+
+  if (data === "admin_toggle_rich") {
+    try {
+      const current = await isRichDeliveryEnabled(env.DB);
+      await setRichDeliveryEnabled(env.DB, !current);
+    } catch (error) {
+      warn("admin: failed to toggle rich delivery", error);
       await safeAnswer(ctx, "❌ Couldn't update the setting (database error).");
       return;
     }

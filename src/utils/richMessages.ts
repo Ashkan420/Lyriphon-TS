@@ -300,6 +300,131 @@ export function buildTrackResultHtml(options: {
   return body;
 }
 
+// Experimental rich-message music delivery: the song as ONE rich message —
+// native audio bubble + a Lyrics button rendered in the body (tg-button-row)
+// instead of a reply_markup keyboard. Four selectable layouts (RichStyleId),
+// picked per-user in /settings.
+//
+// The media[] field on InputRichMessage and the tg-button tags are newer than
+// the pinned @grammyjs/types (3.28.0), so the payload is sent through a loose
+// cast (same precedent as the `style` button attribute in handlers/admin.ts).
+
+const RICH_AUDIO_MEDIA_ID = "music1";
+
+export type RichStyleId = 1 | 2 | 3 | 4;
+
+export const RICH_STYLES: Record<RichStyleId, { name: string; description: string }> = {
+  1: {
+    name: "Button label",
+    description: "audio player + a button named after the song",
+  },
+  2: {
+    name: "Cover card",
+    description: "album art on top, player, Lyrics button",
+  },
+  3: {
+    name: "Art + credit",
+    description: "album art with the song name under it, player, Lyrics button",
+  },
+  4: {
+    name: "Dual buttons",
+    description: "audio player + Lyrics and Deezer buttons",
+  },
+};
+
+export function buildRichAudioDelivery(options: {
+  fileId: string;
+  trackName: string;
+  artistName: string;
+  telegraphUrl: string;
+  style?: RichStyleId;
+  coverUrl?: string;
+  deezerUrl?: string;
+}): { html: string; media: Array<{ id: string; media: { type: "audio"; media: string } }> } {
+  const esc = escapeRichHtml;
+  const style = options.style ?? 1;
+  const audioBlock = `<figure><audio src="tg://audio?id=${RICH_AUDIO_MEDIA_ID}"></audio></figure>`;
+  const label = `${esc(options.trackName)} — ${esc(options.artistName)}`;
+  const lyricsButton =
+    `<tg-button type="url" style="primary" url="${esc(options.telegraphUrl)}">Lyrics</tg-button>`;
+
+  let html: string;
+  if (style === 2 && options.coverUrl) {
+    html = `<img src="${esc(options.coverUrl)}"/>\n${audioBlock}\n` +
+      `<tg-button-row align="center">${lyricsButton}</tg-button-row>`;
+  } else if (style === 3 && options.coverUrl) {
+    html =
+      `<figure><img src="${esc(options.coverUrl)}"/><figcaption>${label}</figcaption></figure>\n` +
+      `${audioBlock}\n` +
+      `<tg-button-row align="center">${lyricsButton}</tg-button-row>`;
+  } else if (style === 4 && options.deezerUrl) {
+    html = `${audioBlock}\n` +
+      `<tg-button-row align="center">` +
+      `${lyricsButton}` +
+      `<tg-button type="url" style="link" url="${esc(options.deezerUrl)}">🎵 Deezer</tg-button>` +
+      `</tg-button-row>`;
+  } else {
+    // Style 1 and every degraded case (2/3 without cover, 4 without the
+    // deezer URL): the audio bubble renders the file's own title/performer
+    // natively, so no text blocks — the button carries the song name.
+    html = `${audioBlock}\n` +
+      `<tg-button-row align="center">` +
+      `<tg-button type="url" style="primary" url="${esc(options.telegraphUrl)}">` +
+      `${label}` +
+      `</tg-button>` +
+      `</tg-button-row>`;
+  }
+
+  return {
+    html,
+    // InputRichMessage.media[] — newer than the pinned @grammyjs/types, hence
+    // the loose shape; the tg://audio?id ref above resolves to it. The API
+    // requires the InputMedia object NESTED under `media` (verified live:
+    // a flattened entry fails with `Field "media" must be of type Object`).
+    media: [{ id: RICH_AUDIO_MEDIA_ID, media: { type: "audio", media: options.fileId } }],
+  };
+}
+
+// Options every delivery site resolves once and hands to sendRichAudio.
+export interface RichAudioOpts {
+  style?: RichStyleId;
+  coverUrl?: string;
+  deezerUrl?: string;
+}
+
+// Send the rich audio delivery. Returns the sent message, or null on any
+// failure so callers keep their existing plain sendAudio path (truthiness
+// check) — a rich rejection must never block a delivery. The message object
+// is what the /settings demo picker tracks for its delete-previous flow.
+export async function sendRichAudio(
+  api: Api<RawApi>,
+  chatId: number,
+  fileId: string,
+  trackName: string,
+  artistName: string,
+  telegraphUrl: string,
+  opts?: RichAudioOpts,
+): Promise<{ message_id: number } | null> {
+  const { html, media } = buildRichAudioDelivery({
+    fileId,
+    trackName,
+    artistName,
+    telegraphUrl,
+    ...opts,
+  });
+  try {
+    const msg = await (api as any).sendRichMessage(chatId, {
+      html,
+      media,
+      skip_entity_detection: true,
+    });
+    return msg ?? null;
+  } catch (error) {
+    warn("rich audio delivery failed, falling back to plain sendAudio", error);
+    return null;
+  }
+}
+
 // Inline variant of the result card: the DM card's hints ("edit options
 // below", "send a music file") don't apply to a sent inline message, so the
 // inline path renders this compact form instead. No edit menu — the DM edit

@@ -26,7 +26,15 @@ import {
   setRequestStatus,
   expireStalePending,
 } from "../db/audioRequests";
-import { getSetting, setSetting, SETTING_BRIDGE_LAST_AUDIO, SETTING_PENDING_SEND_PREFIX } from "../db/settings";
+import {
+  getSetting,
+  setSetting,
+  SETTING_BRIDGE_LAST_AUDIO,
+  SETTING_PENDING_SEND_PREFIX,
+  isRichDeliveryActive,
+} from "../db/settings";
+import { sendRichAudio } from "../utils/richMessages";
+import { resolveRichAudioOpts } from "../utils/telegram";
 import { AUTOFETCH_REQUEST_TTL_SECONDS } from "../config";
 import { setTrackFileId } from "../db/tracks";
 import { getUserChannels } from "../db/channels";
@@ -191,13 +199,32 @@ async function deliverFile(env: Env, audio: any, token: string): Promise<void> {
   }
 
   try {
-    await api.sendAudio(row.chat_id, audio.file_id, {
-      caption,
-      parse_mode: "MarkdownV2",
-      reply_markup: row.telegraph_url
-        ? { inline_keyboard: [[{ text: "Lyrics", url: row.telegraph_url }]] }
-        : undefined,
-    });
+    // Experimental rich delivery first (toggle-gated); plain sendAudio on
+    // any failure — a rich rejection must never block the delivery.
+    let delivered = false;
+    if (row.telegraph_url && (await isRichDeliveryActive(env.DB, row.user_id))) {
+      const richOpts = await resolveRichAudioOpts(env.DB, row.user_id, row.track_id);
+      delivered = Boolean(
+        await sendRichAudio(
+          api,
+          row.chat_id,
+          audio.file_id,
+          trackName,
+          artistName,
+          row.telegraph_url,
+          richOpts,
+        ),
+      );
+    }
+    if (!delivered) {
+      await api.sendAudio(row.chat_id, audio.file_id, {
+        caption,
+        parse_mode: "MarkdownV2",
+        reply_markup: row.telegraph_url
+          ? { inline_keyboard: [[{ text: "Lyrics", url: row.telegraph_url }]] }
+          : undefined,
+      });
+    }
   } catch (error) {
     warn("bridge: sendAudio to requester failed", { chatId: row.chat_id, token }, error);
     await setRequestStatus(env.DB, token, "failed");
@@ -274,7 +301,18 @@ async function deleteQueuedMsg(env: Env, row: AudioRequestRow): Promise<void> {
 // back-to-back deliveries overwrite the stash; a single field would orphan
 // all but the newest prompt.
 type PendingSendPrompt = { chatId: number; messageId: number };
-type PendingSend = { fileId: string; caption: string; telegraphUrl: string | null; prompts?: PendingSendPrompt[]; ts: number };
+type PendingSend = {
+  fileId: string;
+  caption: string;
+  telegraphUrl: string | null;
+  // Rich-delivery context for the send_channel_ path; absent on stashes from
+  // before the rich mode (those fall back to the plain channel send).
+  trackName?: string;
+  artistName?: string;
+  trackId?: number;
+  prompts?: PendingSendPrompt[];
+  ts: number;
+};
 
 const PENDING_SEND_MAX_PROMPTS = 5;
 const PENDING_SEND_FRESH_MS = 3600_000;
@@ -299,7 +337,16 @@ async function stashPendingSend(env: Env, row: AudioRequestRow, fileId: string, 
     await setSetting(
       env.DB,
       `${PENDING_SEND_PREFIX}${row.user_id}`,
-      JSON.stringify({ fileId, caption, telegraphUrl: row.telegraph_url, prompts, ts: Date.now() } satisfies PendingSend),
+      JSON.stringify({
+        fileId,
+        caption,
+        telegraphUrl: row.telegraph_url,
+        trackName: row.track_title ?? undefined,
+        artistName: row.artist_name ?? undefined,
+        trackId: row.track_id,
+        prompts,
+        ts: Date.now(),
+      } satisfies PendingSend),
     );
   } catch (error) {
     warn("bridge: failed to stash pending send", error);

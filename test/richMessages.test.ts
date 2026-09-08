@@ -4,6 +4,8 @@ import {
   countLyricLines,
   renderTrackProgressHtml,
   buildTrackResultHtml,
+  buildRichAudioDelivery,
+  sendRichAudio,
   TrackProgressReporter,
 } from "../src/utils/richMessages";
 
@@ -101,6 +103,126 @@ describe("buildTrackResultHtml", () => {
     const html = buildTrackResultHtml({ ...base, hasAudio: true });
     expect(html).toContain("Telegraph Created & Audio Attached");
     expect(html).not.toContain("Send a music file");
+  });
+});
+
+describe("buildRichAudioDelivery", () => {
+  const base = {
+    fileId: "F1LE",
+    trackName: "Song",
+    artistName: "Artist",
+    telegraphUrl: "https://telegra.ph/abc",
+  };
+
+  it("style 1 (default): audio bubble + song-named button, no extra blocks", () => {
+    const { html, media } = buildRichAudioDelivery(base);
+    expect(html).toContain('<audio src="tg://audio?id=music1"></audio>');
+    expect(html).not.toContain("<code>");
+    expect(html).toContain('<tg-button type="url" style="primary" url="https://telegra.ph/abc">Song — Artist</tg-button>');
+    expect(html).toContain('<tg-button-row align="center">');
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("reply_markup");
+    expect(media).toEqual([{ id: "music1", media: { type: "audio", media: "F1LE" } }]);
+  });
+
+  it("style 2: cover image block on top of the player + Lyrics button", () => {
+    const { html } = buildRichAudioDelivery({ ...base, style: 2, coverUrl: "https://e-cdns.dzcdn.net/cover.jpg" });
+    expect(html).toContain('<img src="https://e-cdns.dzcdn.net/cover.jpg"/>');
+    expect(html).toContain("tg://audio?id=music1");
+    expect(html).toContain(">Lyrics</tg-button>");
+    expect(html).not.toContain("Song — Artist"); // player shows the title natively
+  });
+
+  it("style 3: cover with the song name as figcaption credit", () => {
+    const { html } = buildRichAudioDelivery({ ...base, style: 3, coverUrl: "https://e-cdns.dzcdn.net/cover.jpg" });
+    expect(html).toContain("<figcaption>Song — Artist</figcaption>");
+    expect(html).toContain("<img");
+    expect(html).toContain(">Lyrics</tg-button>");
+  });
+
+  it("style 4: Lyrics + Deezer dual buttons", () => {
+    const { html } = buildRichAudioDelivery({ ...base, style: 4, deezerUrl: "https://www.deezer.com/track/138545995" });
+    expect(html).toContain(">Lyrics</tg-button>");
+    expect(html).toContain('url="https://www.deezer.com/track/138545995"');
+    expect(html).toContain("🎵 Deezer</tg-button>");
+    expect(html).not.toContain("<img");
+  });
+
+  it("degrades 2/3 without a cover and 4 without a deezer URL to the style-1 body", () => {
+    const noCover2 = buildRichAudioDelivery({ ...base, style: 2 });
+    const noCover3 = buildRichAudioDelivery({ ...base, style: 3 });
+    const noDeezer4 = buildRichAudioDelivery({ ...base, style: 4 });
+    for (const { html } of [noCover2, noCover3, noDeezer4]) {
+      expect(html).toContain(">Song — Artist</tg-button>");
+      expect(html).not.toContain("<img");
+      expect(html).not.toContain("Deezer");
+    }
+  });
+
+  it("escapes rich-HTML-significant characters in names and URL (all styles)", () => {
+    const nasty = {
+      fileId: "F",
+      trackName: 'A & B <C> "D"',
+      artistName: "E>F",
+      telegraphUrl: "https://telegra.ph/x?a=1&b=2",
+    };
+    const s1 = buildRichAudioDelivery(nasty).html;
+    expect(s1).toContain('url="https://telegra.ph/x?a=1&amp;b=2"');
+    expect(s1).toContain(">A &amp; B &lt;C&gt; &quot;D&quot; — E&gt;F</tg-button>");
+
+    const s3 = buildRichAudioDelivery({ ...nasty, style: 3, coverUrl: "https://c/1.jpg" }).html;
+    expect(s3).toContain("<figcaption>A &amp; B &lt;C&gt; &quot;D&quot; — E&gt;F</figcaption>");
+  });
+});
+
+describe("sendRichAudio", () => {
+  it("sends one rich message with html + media and no reply_markup", async () => {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const api: any = {
+      sendRichMessage: (...args: unknown[]) => {
+        calls.push({ method: "sendRichMessage", args });
+        return Promise.resolve({ message_id: 1 });
+      },
+    };
+
+    const msg = await sendRichAudio(api, 42, "F1LE", "Song", "Artist", "https://telegra.ph/abc");
+
+    expect(msg?.message_id).toBe(1);
+    expect(calls).toHaveLength(1);
+    const [chatId, payload] = calls[0].args as [number, any];
+    expect(chatId).toBe(42);
+    expect(payload).toMatchObject({
+      html: expect.stringContaining("tg://audio?id=music1"),
+      skip_entity_detection: true,
+    });
+    expect(payload.media).toEqual([{ id: "music1", media: { type: "audio", media: "F1LE" } }]);
+    expect(JSON.stringify(payload)).not.toContain("reply_markup");
+  });
+
+  it("forwards style options to the builder", async () => {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const api: any = {
+      sendRichMessage: (...args: unknown[]) => {
+        calls.push({ method: "sendRichMessage", args });
+        return Promise.resolve({ message_id: 5 });
+      },
+    };
+
+    await sendRichAudio(api, 1, "F", "S", "A", "https://t.ph/x", {
+      style: 2,
+      coverUrl: "https://c/2.jpg",
+    });
+
+    const payload = calls[0].args[1] as any;
+    expect(payload.html).toContain('<img src="https://c/2.jpg"/>');
+  });
+
+  it("returns null without throwing when the rich send fails", async () => {
+    const api: any = {
+      sendRichMessage: () => Promise.reject(new Error("can't parse rich message")),
+    };
+    const msg = await sendRichAudio(api, 42, "F1LE", "Song", "Artist", "https://telegra.ph/abc");
+    expect(msg).toBeNull();
   });
 });
 

@@ -16,7 +16,7 @@ import { handleExpandEditMenu } from "./index";
 import { handleTranslateCallback } from "./translate";
 import { handleRefreshSummaryCallback } from "./summary";
 import { handleLogsPageCallback, handleLogsCloseCallback } from "./logs";
-import { handleSettingsCallback } from "../settings";
+import { handleSettingsCallback, handleRichStyleCallback } from "../settings";
 
 // Single stable entry point. `bot.ts` imports handleCallbackQuery /
 // processTextMessage from "../handlers/callbacks" — that barrel re-exports this,
@@ -24,6 +24,17 @@ import { handleSettingsCallback } from "../settings";
 export async function handleCallbackQuery(ctx: Context, session: SessionData, env: Env) {
   const data = ctx.callbackQuery?.data;
   if (!data) {
+    return;
+  }
+
+  // Rich-style picker + its back button: checked before the generic
+  // settings_ prefix branch (settings_back collides with it).
+  if (
+    data.startsWith("richstyle_") ||
+    data === "settings_richstyles" ||
+    data === "settings_back"
+  ) {
+    await handleRichStyleCallback(ctx, env);
     return;
   }
 
