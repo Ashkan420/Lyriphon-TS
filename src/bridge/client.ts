@@ -452,15 +452,18 @@ export class BridgeJobs {
     // job silently waits out its timeout.
     const audioPromise = this.collectAlbumAudio(client, albumId);
 
-    const sent = await client.sendMessage(deezload, {
+    // Freshness anchor: the view must be posted/edited at or after this
+    // moment. NOT an id comparison — MTProto private chats keep a separate
+    // id sequence per participant, so deezload's message ids mean nothing
+    // against ours; timestamps are the only cross-sequence-safe order.
+    const startedAt = Math.floor(Date.now() / 1000);
+
+    await client.sendMessage(deezload, {
       message: `/start deezertalbum${albumId}`,
       linkPreview: false,
     });
 
-    // Only a view NEWER than our /start is acceptable — older views for the
-    // same album (from earlier runs, possibly pressed manually) sit in
-    // recent history and would fail the callback on an expired message.
-    const view = await this.waitForAlbumView(client, deezload, albumId, sent.id);
+    const view = await this.waitForAlbumView(client, deezload, albumId, startedAt);
     if (!view) {
       audioPromise.catch(() => {});
       throw new Error(`no album view from deezload for album ${albumId}`);
@@ -537,7 +540,7 @@ export class BridgeJobs {
     client: TelegramClient,
     deezload: any,
     albumId: number,
-    afterMsgId: number,
+    startedAt: number,
   ): Promise<Api.Message | null> {
     const hasGetAll = (msg: any): boolean => {
       const rows = msg?.replyMarkup?.rows;
@@ -546,8 +549,12 @@ export class BridgeJobs {
         (b) => b.data && bytesStartsWith(b.data, `album/${albumId}/down`),
       );
     };
-    const isNewer = (msg: any): boolean =>
-      typeof msg?.id === "number" && msg.id > afterMsgId;
+    // Cross-sequence-safe freshness: message DATE, not id (each private-chat
+    // participant has an independent id sequence in raw MTProto). One minute
+    // of slack for clock skew; also accepts edits — deezload may re-render
+    // an existing view instead of posting a new one.
+    const isFresh = (msg: any): boolean =>
+      typeof msg?.date === "number" && msg.date >= startedAt - 60;
 
     return new Promise<Api.Message | null>((resolve) => {
       let settled = false;
@@ -562,14 +569,16 @@ export class BridgeJobs {
 
       const handler = (update: any) => {
         if (settled) return;
+        // New posts and edits both carry .message; deezload may edit its
+        // existing view instead of posting a fresh one.
         const msg = update?.message;
         if (!msg || typeof msg.id !== "number") return;
-        if (!isNewer(msg) || !hasGetAll(msg)) {
+        if (!isFresh(msg) || !hasGetAll(msg)) {
           return; // a menu / stale view / status text — keep waiting
         }
         settled = true;
         cleanup();
-        log(`bridge: album ${albumId} view received (msg ${msg.id})`);
+        log(`bridge: album ${albumId} view received (msg ${msg.id}, date ${msg.date})`);
         resolve(msg as Api.Message);
       };
 
@@ -582,7 +591,7 @@ export class BridgeJobs {
           try {
             const msgs = await client.getMessages(deezload, { limit: 5 });
             for (const m of msgs) {
-              if (isNewer(m) && hasGetAll(m)) {
+              if (isFresh(m) && hasGetAll(m)) {
                 settled = true;
                 cleanup();
                 log(`bridge: album ${albumId} view found by poll (msg ${(m as any).id})`);
