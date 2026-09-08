@@ -5,6 +5,7 @@ import {
   renderTrackProgressHtml,
   buildTrackResultHtml,
   buildRichAudioDelivery,
+  buildRichOptionDemo,
   sendRichAudio,
   TrackProgressReporter,
 } from "../src/utils/richMessages";
@@ -109,69 +110,66 @@ describe("buildTrackResultHtml", () => {
 describe("buildRichAudioDelivery", () => {
   const base = {
     fileId: "F1LE",
-    trackName: "Song",
-    artistName: "Artist",
     telegraphUrl: "https://telegra.ph/abc",
   };
 
-  it("style 1 (default): audio bubble + song-named button, no extra blocks", () => {
+  it("layout 1 (default): audio bubble + centered primary Lyrics button", () => {
     const { html, media } = buildRichAudioDelivery(base);
     expect(html).toContain('<audio src="tg://audio?id=music1"></audio>');
-    expect(html).not.toContain("<code>");
-    expect(html).toContain('<tg-button type="url" style="primary" url="https://telegra.ph/abc">Song — Artist</tg-button>');
+    expect(html).toContain('<tg-button type="url" style="primary" url="https://telegra.ph/abc">Lyrics</tg-button>');
     expect(html).toContain('<tg-button-row align="center">');
     expect(html).not.toContain("<img");
     expect(html).not.toContain("reply_markup");
     expect(media).toEqual([{ id: "music1", media: { type: "audio", media: "F1LE" } }]);
   });
 
-  it("style 2: cover image block on top of the player + Lyrics button", () => {
-    const { html } = buildRichAudioDelivery({ ...base, style: 2, coverUrl: "https://e-cdns.dzcdn.net/cover.jpg" });
+  it("layout 2: cover image block on top of the player + Lyrics button", () => {
+    const { html } = buildRichAudioDelivery({ ...base, layout: 2, coverUrl: "https://e-cdns.dzcdn.net/cover.jpg" });
     expect(html).toContain('<img src="https://e-cdns.dzcdn.net/cover.jpg"/>');
     expect(html).toContain("tg://audio?id=music1");
     expect(html).toContain(">Lyrics</tg-button>");
-    expect(html).not.toContain("Song — Artist"); // player shows the title natively
   });
 
-  it("style 3: cover with the song name as figcaption credit", () => {
-    const { html } = buildRichAudioDelivery({ ...base, style: 3, coverUrl: "https://e-cdns.dzcdn.net/cover.jpg" });
-    expect(html).toContain("<figcaption>Song — Artist</figcaption>");
-    expect(html).toContain("<img");
-    expect(html).toContain(">Lyrics</tg-button>");
-  });
-
-  it("style 4: Lyrics + album deezload dual buttons", () => {
-    const { html } = buildRichAudioDelivery({ ...base, style: 4, deezerUrl: "https://t.me/deezload2bot?start=deezertalbum1020904331" });
-    expect(html).toContain(">Lyrics</tg-button>");
-    expect(html).toContain('url="https://t.me/deezload2bot?start=deezertalbum1020904331"');
-    expect(html).toContain("💽 Album</tg-button>");
+  it("layout 2 without a cover degrades to layout 1's body", () => {
+    const { html } = buildRichAudioDelivery({ ...base, layout: 2 });
     expect(html).not.toContain("<img");
+    expect(html).toContain(">Lyrics</tg-button>");
   });
 
-  it("degrades 2/3 without a cover and 4 without an album link to the style-1 body", () => {
-    const noCover2 = buildRichAudioDelivery({ ...base, style: 2 });
-    const noCover3 = buildRichAudioDelivery({ ...base, style: 3 });
-    const noDeezer4 = buildRichAudioDelivery({ ...base, style: 4 });
-    for (const { html } of [noCover2, noCover3, noDeezer4]) {
-      expect(html).toContain(">Song — Artist</tg-button>");
-      expect(html).not.toContain("<img");
-      expect(html).not.toContain("💽");
-    }
+  it("position and color knobs render as row align + button style", () => {
+    const right = buildRichAudioDelivery({ ...base, position: "right", color: "success" }).html;
+    expect(right).toContain('<tg-button-row align="right">');
+    expect(right).toContain('style="success"');
+
+    const leftDefault = buildRichAudioDelivery({ ...base, position: "left", color: "default" }).html;
+    expect(leftDefault).toContain('<tg-button-row align="left">');
+    // "default" omits the style attribute entirely.
+    expect(leftDefault).not.toContain('style="default"');
+    expect(leftDefault).toContain('<tg-button type="url" url=');
   });
 
-  it("escapes rich-HTML-significant characters in names and URL (all styles)", () => {
-    const nasty = {
-      fileId: "F",
-      trackName: 'A & B <C> "D"',
-      artistName: "E>F",
-      telegraphUrl: "https://telegra.ph/x?a=1&b=2",
-    };
-    const s1 = buildRichAudioDelivery(nasty).html;
-    expect(s1).toContain('url="https://telegra.ph/x?a=1&amp;b=2"');
-    expect(s1).toContain(">A &amp; B &lt;C&gt; &quot;D&quot; — E&gt;F</tg-button>");
+  it("escapes the Telegraph URL", () => {
+    const { html } = buildRichAudioDelivery({ ...base, telegraphUrl: "https://telegra.ph/x?a=1&b=2" });
+    expect(html).toContain('url="https://telegra.ph/x?a=1&amp;b=2"');
+  });
+});
 
-    const s3 = buildRichAudioDelivery({ ...nasty, style: 3, coverUrl: "https://c/1.jpg" }).html;
-    expect(s3).toContain("<figcaption>A &amp; B &lt;C&gt; &quot;D&quot; — E&gt;F</figcaption>");
+describe("buildRichOptionDemo", () => {
+  it("position demo: one row per position, callback buttons with richpos_ data", () => {
+    const { html, media } = buildRichOptionDemo("position", "DEMO");
+    expect(html).toContain('<tg-button-row align="left"><tg-button type="callback_data" data="richpos_left">Lyrics ◀️</tg-button></tg-button-row>');
+    expect(html).toContain('<tg-button-row align="center"><tg-button type="callback_data" data="richpos_center">Lyrics ⏺</tg-button></tg-button-row>');
+    expect(html).toContain('<tg-button-row align="right"><tg-button type="callback_data" data="richpos_right">Lyrics ▶️</tg-button></tg-button-row>');
+    expect(media).toEqual([{ id: "music1", media: { type: "audio", media: "DEMO" } }]);
+  });
+
+  it("color demo: one row with the four styles and richcol_ data", () => {
+    const { html } = buildRichOptionDemo("color", "DEMO");
+    expect(html).toContain('data="richcol_default"'); // no style attr
+    expect(html).not.toContain('style="default"');
+    expect(html).toContain('style="primary" data="richcol_primary"');
+    expect(html).toContain('style="success" data="richcol_success"');
+    expect(html).toContain('style="danger" data="richcol_danger"');
   });
 });
 
@@ -185,7 +183,7 @@ describe("sendRichAudio", () => {
       },
     };
 
-    const msg = await sendRichAudio(api, 42, "F1LE", "Song", "Artist", "https://telegra.ph/abc");
+    const msg = await sendRichAudio(api, 42, "F1LE", "https://telegra.ph/abc");
 
     expect(msg?.message_id).toBe(1);
     expect(calls).toHaveLength(1);
@@ -199,7 +197,7 @@ describe("sendRichAudio", () => {
     expect(JSON.stringify(payload)).not.toContain("reply_markup");
   });
 
-  it("forwards style options to the builder", async () => {
+  it("forwards layout options to the builder", async () => {
     const calls: Array<{ method: string; args: unknown[] }> = [];
     const api: any = {
       sendRichMessage: (...args: unknown[]) => {
@@ -208,8 +206,8 @@ describe("sendRichAudio", () => {
       },
     };
 
-    await sendRichAudio(api, 1, "F", "S", "A", "https://t.ph/x", {
-      style: 2,
+    await sendRichAudio(api, 1, "F", "https://t.ph/x", {
+      layout: 2,
       coverUrl: "https://c/2.jpg",
     });
 
@@ -221,7 +219,7 @@ describe("sendRichAudio", () => {
     const api: any = {
       sendRichMessage: () => Promise.reject(new Error("can't parse rich message")),
     };
-    const msg = await sendRichAudio(api, 42, "F1LE", "Song", "Artist", "https://telegra.ph/abc");
+    const msg = await sendRichAudio(api, 42, "F1LE", "https://telegra.ph/abc");
     expect(msg).toBeNull();
   });
 });

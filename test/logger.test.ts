@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { debug, isDebug, previewText, setDebug, runWithLogScope, log, getRecentLogs } from "../src/utils/logger";
+import {
+  debug,
+  isDebug,
+  previewText,
+  setDebug,
+  runWithLogScope,
+  log,
+  getRecentLogs,
+  formatLogPage,
+} from "../src/utils/logger";
 
 describe("logger", () => {
   afterEach(() => {
@@ -56,5 +65,40 @@ describe("logger", () => {
       expect(getRecentLogs().some((e) => e.text === "scope-test-from-a")).toBe(false);
     });
     spy.mockRestore();
+  });
+
+  describe("formatLogPage", () => {
+    // Overflow the 120-entry buffer with unique markers so assertions are
+    // deterministic: pre-existing entries get evicted and the surviving
+    // window is mark-031 … mark-150 (stable sort keeps insertion order for
+    // identical Date.now() timestamps).
+    const FIRST = 31;
+    const LAST = 150;
+    const fill = () => {
+      for (let i = 1; i <= 150; i++) {
+        log(`mark-${String(i).padStart(3, "0")} padding-padding-padding`);
+      }
+    };
+
+    it("defaults to the newest page (y/y) with the latest entry at the bottom", () => {
+      fill();
+      const pg = formatLogPage();
+      expect(pg.page).toBe(pg.totalPages - 1);
+      expect(pg.text).toContain(`page ${pg.totalPages}/${pg.totalPages}`);
+      expect(
+        pg.text.trimEnd().endsWith(`mark-${String(LAST).padStart(3, "0")} padding-padding-padding`),
+      ).toBe(true);
+    });
+
+    it("page 0 is the oldest page, oldest → newest within a page", () => {
+      fill();
+      const pg = formatLogPage(0);
+      expect(pg.text).toContain("page 1/");
+      expect(pg.text).toContain(`mark-${String(FIRST).padStart(3, "0")}`);
+      expect(pg.text).not.toContain(`mark-${String(LAST).padStart(3, "0")}`);
+      const first = pg.text.indexOf(`mark-${String(FIRST).padStart(3, "0")}`);
+      const second = pg.text.indexOf(`mark-${String(FIRST + 1).padStart(3, "0")}`);
+      expect(first).toBeLessThan(second);
+    });
   });
 });

@@ -10,7 +10,7 @@
 // (ctx, env)). Picker state lives in a per-user D1 KV blob — same pattern as
 // the bridge's pending-send stash — so a refresh mid-picker just starts over.
 
-import { Context } from "grammy";
+import { Context, Api, RawApi } from "grammy";
 import { Env } from "../env";
 import {
   isAutoFetchEnabled,
@@ -22,14 +22,20 @@ import {
   setUserRichDeliveryEnabled,
   getUserRichStyle,
   setUserRichStyle,
+  getUserRichPosition,
+  setUserRichPosition,
+  getUserRichColor,
+  setUserRichColor,
   getSetting,
   setSetting,
 } from "../db/settings";
-import { safeAnswer, safeDelete, fetchCoverUrl, fetchAlbumDeezerUrl } from "../utils/telegram";
+import { safeAnswer, safeDelete, fetchCoverUrl } from "../utils/telegram";
 import {
   sendRichAudio,
-  RICH_STYLES,
-  RichStyleId,
+  buildRichOptionDemo,
+  RICH_LAYOUTS,
+  RichPosition,
+  RichColor,
 } from "../utils/richMessages";
 import { warn } from "../utils/logger";
 
@@ -190,54 +196,102 @@ export async function handleSettingsCommand(ctx: Context, env: Env): Promise<voi
   }
 }
 
-// ── Rich-style picker ───────────────────────────────────────────────────────
+// ── Rich-delivery customizer ────────────────────────────────────────────────
+//
+// One selector message lists the user's current layout/position/color with
+// ✅. Layouts preview as live rich demos (Hello — Adele); position and color
+// each open an interactive rich demo where the Lyrics button itself is
+// rendered once per option as a clickable callback tg-button — tapping one
+// saves it. Session-free: picker state is the per-user D1 KV blob.
 
-function buildPickerText(saved: RichStyleId, lastPreviewed?: RichStyleId): string {
-  const lines = [
-    "🎨 <b>Rich music delivery styles</b>",
-    "",
-    "Preview a style below (a live demo with Hello — Adele appears as its own message), then tap <b>Use style</b> to save it.",
-    "",
-  ];
-  for (const id of [1, 2, 3, 4] as RichStyleId[]) {
-    const mark = id === saved ? " ✅" : id === lastPreviewed ? " 👀" : "";
-    lines.push(`<b>${id} · ${RICH_STYLES[id].name}</b> — ${RICH_STYLES[id].description}${mark}`);
+type RichPrefs = {
+  layout: 1 | 2;
+  position: RichPosition;
+  color: RichColor;
+};
+
+const POSITION_LABELS: Record<RichPosition, string> = {
+  left: "Left",
+  center: "Center",
+  right: "Right",
+};
+
+const COLOR_LABELS: Record<RichColor, string> = {
+  default: "Gray",
+  primary: "Blue",
+  success: "Green",
+  danger: "Red",
+};
+
+async function readRichPrefs(env: Env, userId: string): Promise<RichPrefs> {
+  try {
+    const [layout, position, color] = await Promise.all([
+      getUserRichStyle(env.DB, userId),
+      getUserRichPosition(env.DB, userId),
+      getUserRichColor(env.DB, userId),
+    ]);
+    return { layout, position, color };
+  } catch {
+    return { layout: 1, position: "center", color: "primary" };
   }
-  return lines.join("\n");
 }
 
-function buildPickerKeyboard(saved: RichStyleId, lastPreviewed?: RichStyleId): SettingsButton[][] {
-  const styleButtons = ([1, 2, 3, 4] as RichStyleId[]).map((id) => ({
-    text: `${id}`,
+function buildPickerText(prefs: RichPrefs): string {
+  return [
+    "🎨 <b>Rich music delivery</b>",
+    "",
+    `Layout: <b>${prefs.layout} · ${RICH_LAYOUTS[prefs.layout].name}</b> ✅`,
+    `Position: <b>${POSITION_LABELS[prefs.position]}</b> ✅`,
+    `Color: <b>${COLOR_LABELS[prefs.color]}</b> ✅`,
+    "",
+    "Tap a layout to preview it (a live demo with Hello — Adele appears as its own message).",
+    "Position and Color open an interactive demo — tap the Lyrics button rendered in the look you want.",
+  ].join("\n");
+}
+
+function buildPickerKeyboard(prefs: RichPrefs, lastPreviewed?: 1 | 2): SettingsButton[][] {
+  const layoutButtons = ([1, 2] as (1 | 2)[]).map((id) => ({
+    text: `${id} · ${RICH_LAYOUTS[id].name}`,
     callback_data: `richstyle_demo_${id}`,
-    style: id === saved ? ("success" as const) : id === lastPreviewed ? ("primary" as const) : undefined,
+    style: id === prefs.layout ? ("success" as const) : id === lastPreviewed ? ("primary" as const) : undefined,
   }));
   return [
-    styleButtons,
+    layoutButtons,
     [
       {
-        text: lastPreviewed && lastPreviewed !== saved ? `✅ Use style ${lastPreviewed}` : `✅ Use style ${saved}`,
-        callback_data: `richstyle_save_${lastPreviewed && lastPreviewed !== saved ? lastPreviewed : saved}`,
+        text: `✅ Use layout ${lastPreviewed ?? prefs.layout}`,
+        callback_data: `richstyle_save_${lastPreviewed ?? prefs.layout}`,
         style: "success" as const,
       },
+    ],
+    [
+      { text: "↔️ Position", callback_data: "richdemo_pos" },
+      { text: "🎨 Color", callback_data: "richdemo_col" },
     ],
     [{ text: "⬅️ Settings", callback_data: "settings_back" }],
   ];
 }
 
-async function editPicker(ctx: Context, saved: RichStyleId, lastPreviewed?: RichStyleId): Promise<void> {
+// Refresh the selector message from a state object (id from the KV blob).
+async function editSelectorWithState(
+  api: Api<RawApi>,
+  chatId: number,
+  selMsgId: number,
+  prefs: RichPrefs,
+  lastPreviewed?: 1 | 2,
+): Promise<void> {
   try {
-    await ctx.editMessageText(buildPickerText(saved, lastPreviewed), {
+    await api.editMessageText(chatId, selMsgId, buildPickerText(prefs), {
       parse_mode: "HTML",
-      reply_markup: { inline_keyboard: buildPickerKeyboard(saved, lastPreviewed) as any },
+      reply_markup: { inline_keyboard: buildPickerKeyboard(prefs, lastPreviewed) as any },
     });
   } catch {
-    // "message is not modified" races are fine.
+    // "message is not modified" / deleted selector — nothing to do.
   }
 }
 
-// "Rich styles" entry from the main panel: reuse a fresh picker if one is
-// still open, otherwise send a new selector message.
+// "Rich styles" entry from the main panel: replace any stale picker with a
+// fresh one (self-healing instead of an "already open" alert).
 async function openRichStylePicker(ctx: Context, env: Env, userId: string): Promise<void> {
   const richOn = await isUserRichDeliveryEnabled(env.DB, userId);
   if (!richOn) {
@@ -251,92 +305,147 @@ async function openRichStylePicker(ctx: Context, env: Env, userId: string): Prom
     return;
   }
 
-  const saved = await getUserRichStyle(env.DB, userId);
+  // Clean up a previous picker's messages, then send fresh.
   const existing = await readDemoState(env.DB, userId);
   if (existing) {
-    // Selector still alive — point the user back at it instead of stacking
-    // a second picker.
-    await safeAnswer(ctx, "The style picker is already open — it's the message right above.");
-    return;
+    await safeDelete(ctx.api as any, chatId, existing.selMsgId);
+    if (existing.lastDemoMsgId) {
+      await safeDelete(ctx.api as any, chatId, existing.lastDemoMsgId);
+    }
   }
+
+  const prefs = await readRichPrefs(env, userId);
   const sel = await ctx.api.sendMessage(
     chatId,
-    buildPickerText(saved),
-    { parse_mode: "HTML", reply_markup: { inline_keyboard: buildPickerKeyboard(saved) as any } },
+    buildPickerText(prefs),
+    { parse_mode: "HTML", reply_markup: { inline_keyboard: buildPickerKeyboard(prefs) as any } },
   );
   await writeDemoState(env.DB, userId, { selMsgId: sel.message_id, ts: Date.now() });
   await safeAnswer(ctx);
 }
 
-// Preview click: delete the previous demo, send the new one, move the ✅.
-async function previewRichStyle(ctx: Context, env: Env, userId: string, style: RichStyleId): Promise<void> {
+// Shared by every demo path: delete the previous demo, send the replacement,
+// track its id.
+async function sendDemo(
+  ctx: Context,
+  env: Env,
+  userId: string,
+  payload: { html: string; media: Array<{ id: string; media: { type: "audio"; media: string } }> },
+): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const state = await readDemoState(env.DB, userId);
-  const saved = await getUserRichStyle(env.DB, userId);
-
   if (state?.lastDemoMsgId) {
     await safeDelete(ctx.api as any, chatId, state.lastDemoMsgId);
   }
-
-  // Styles 2/3 need the album cover; 4 needs the deezload album link. Demo
-  // data is fixed, so resolve directly instead of resolveRichAudioOpts's
-  // per-user path.
-  let coverUrl: string | undefined;
-  let deezerUrl: string | undefined;
-  if (style === 2 || style === 3) {
-    coverUrl = await fetchCoverUrl(RICH_DEMO.trackId);
-  } else if (style === 4) {
-    deezerUrl = await fetchAlbumDeezerUrl(RICH_DEMO.trackId);
+  try {
+    const msg = await (ctx.api as any).sendRichMessage(chatId, {
+      html: payload.html,
+      media: payload.media,
+      skip_entity_detection: true,
+    });
+    await writeDemoState(env.DB, userId, {
+      selMsgId: state?.selMsgId ?? 0,
+      lastDemoMsgId: msg?.message_id,
+      ts: Date.now(),
+    });
+  } catch (error) {
+    warn("settings: rich demo send failed", error);
   }
+}
 
+// Layout preview click: a full rich demo of the layout with the demo track.
+async function previewRichLayout(ctx: Context, env: Env, userId: string, layout: 1 | 2): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  const prefs = await readRichPrefs(env, userId);
+  let coverUrl: string | undefined;
+  if (layout === 2) {
+    coverUrl = await fetchCoverUrl(RICH_DEMO.trackId);
+  }
   const msg = await sendRichAudio(
     ctx.api,
     chatId,
     RICH_DEMO.fileId,
-    RICH_DEMO.trackName,
-    RICH_DEMO.artistName,
     RICH_DEMO.telegraphUrl,
-    { style, coverUrl, deezerUrl },
+    { layout, position: prefs.position, color: prefs.color, coverUrl },
   );
-
   if (!msg) {
-    warn("settings: rich style demo failed", style);
-    await editPicker(ctx, saved);
+    warn("settings: rich layout demo failed", layout);
+    await safeAnswer(ctx, "⚠️ Couldn't render this layout right now.");
     return;
   }
-
+  const state = await readDemoState(env.DB, userId);
   await writeDemoState(env.DB, userId, {
     selMsgId: state?.selMsgId ?? (ctx.callbackQuery?.message as any)?.message_id ?? 0,
     lastDemoMsgId: msg.message_id,
     ts: Date.now(),
   });
-  await editPicker(ctx, saved, style);
+  if (state?.selMsgId) {
+    await editSelectorWithState(ctx.api, chatId, state.selMsgId, prefs, layout);
+  }
+  await safeAnswer(ctx);
 }
 
-// Save click: persist the style and confirm on the selector.
-async function saveRichStyle(ctx: Context, env: Env, userId: string, style: RichStyleId): Promise<void> {
+// Save-layout click.
+async function saveRichLayout(ctx: Context, env: Env, userId: string, layout: 1 | 2): Promise<void> {
   try {
-    await setUserRichStyle(env.DB, userId, style);
+    await setUserRichStyle(env.DB, userId, layout);
   } catch (error) {
-    warn("settings: failed to save rich style", error);
-    await safeAnswer(ctx, "❌ Couldn't save the style. Try again.");
+    warn("settings: failed to save rich layout", error);
+    await safeAnswer(ctx, "❌ Couldn't save the layout. Try again.");
     return;
   }
-  try {
-    await ctx.editMessageText(
-      `${buildPickerText(style)}\n\n<b>Saved — new deliveries use style ${style}.</b>`,
-      {
-        parse_mode: "HTML",
-        reply_markup: { inline_keyboard: buildPickerKeyboard(style, style) as any },
-      },
-    );
-  } catch {
-    // edit races fine
+  await safeAnswer(ctx, `✅ Layout ${layout} saved`);
+  const chatId = ctx.chat?.id;
+  const state = await readDemoState(env.DB, userId);
+  if (chatId && state?.selMsgId) {
+    const prefs = await readRichPrefs(env, userId);
+    await editSelectorWithState(ctx.api, chatId, state.selMsgId, prefs);
   }
 }
 
-// Back: clean up picker messages and end the flow (user re-runs /settings).
+// Position/color option-demo click: send the interactive demo (the Lyrics
+// buttons inside it are callback tg-buttons that save on tap).
+async function openOptionDemo(ctx: Context, env: Env, userId: string, kind: "position" | "color"): Promise<void> {
+  await sendDemo(ctx, env, userId, buildRichOptionDemo(kind, RICH_DEMO.fileId));
+  await safeAnswer(ctx);
+}
+
+// richpos_* / richcol_* click from inside an option demo: persist and
+// confirm, then refresh the selector's ✅ lines.
+async function saveOptionPick(ctx: Context, env: Env, userId: string, kind: "position" | "color", value: string): Promise<void> {
+  const chatId = ctx.chat?.id;
+  let saved = false;
+  try {
+    if (kind === "position" && (value === "left" || value === "center" || value === "right")) {
+      await setUserRichPosition(env.DB, userId, value);
+      saved = true;
+    } else if (
+      kind === "color" &&
+      (value === "default" || value === "primary" || value === "success" || value === "danger")
+    ) {
+      await setUserRichColor(env.DB, userId, value);
+      saved = true;
+    }
+  } catch (error) {
+    warn("settings: failed to save rich option", error);
+  }
+  if (!saved) {
+    await safeAnswer(ctx, "❌ Couldn't save. Try again.");
+    return;
+  }
+  await safeAnswer(ctx, kind === "position" ? `✅ Saved: ${POSITION_LABELS[value as RichPosition]}` : `✅ Saved: ${COLOR_LABELS[value as RichColor]}`);
+  if (chatId) {
+    const state = await readDemoState(env.DB, userId);
+    if (state?.selMsgId) {
+      const prefs = await readRichPrefs(env, userId);
+      await editSelectorWithState(ctx.api, chatId, state.selMsgId, prefs);
+    }
+  }
+}
+
+// Back: clean up picker + demo messages and end the flow.
 async function closeRichStylePicker(ctx: Context, env: Env, userId: string): Promise<void> {
   const chatId = ctx.chat?.id;
   const state = await readDemoState(env.DB, userId);
@@ -353,7 +462,8 @@ async function closeRichStylePicker(ctx: Context, env: Env, userId: string): Pro
   }
 }
 
-// Router for the picker callbacks. Returns true when the data was handled.
+// Router for the rich-delivery picker callbacks. Returns true when the data
+// was handled.
 export async function handleRichStyleCallback(ctx: Context, env: Env): Promise<boolean> {
   const data = ctx.callbackQuery?.data ?? "";
   const userId = String(ctx.from?.id ?? "");
@@ -369,23 +479,37 @@ export async function handleRichStyleCallback(ctx: Context, env: Env): Promise<b
     return true;
   }
   if (data.startsWith("richstyle_demo_")) {
-    const style = Number(data.replace("richstyle_demo_", "")) as RichStyleId;
-    if (style === 1 || style === 2 || style === 3 || style === 4) {
-      await safeAnswer(ctx);
-      await previewRichStyle(ctx, env, userId, style);
+    const layout = Number(data.replace("richstyle_demo_", ""));
+    if (layout === 1 || layout === 2) {
+      await previewRichLayout(ctx, env, userId, layout);
     } else {
-      await safeAnswer(ctx, "Unknown style.");
+      await safeAnswer(ctx, "Unknown layout.");
     }
     return true;
   }
   if (data.startsWith("richstyle_save_")) {
-    const style = Number(data.replace("richstyle_save_", "")) as RichStyleId;
-    if (style === 1 || style === 2 || style === 3 || style === 4) {
-      await safeAnswer(ctx);
-      await saveRichStyle(ctx, env, userId, style);
+    const layout = Number(data.replace("richstyle_save_", ""));
+    if (layout === 1 || layout === 2) {
+      await saveRichLayout(ctx, env, userId, layout);
     } else {
-      await safeAnswer(ctx, "Unknown style.");
+      await safeAnswer(ctx, "Unknown layout.");
     }
+    return true;
+  }
+  if (data === "richdemo_pos") {
+    await openOptionDemo(ctx, env, userId, "position");
+    return true;
+  }
+  if (data === "richdemo_col") {
+    await openOptionDemo(ctx, env, userId, "color");
+    return true;
+  }
+  if (data.startsWith("richpos_")) {
+    await saveOptionPick(ctx, env, userId, "position", data.replace("richpos_", ""));
+    return true;
+  }
+  if (data.startsWith("richcol_")) {
+    await saveOptionPick(ctx, env, userId, "color", data.replace("richcol_", ""));
     return true;
   }
   return false;

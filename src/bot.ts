@@ -119,9 +119,10 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     if (!isBotOwner(ctx, env)) {
       return;
     }
-    const pg = formatLogPage(0);
+    const pg = formatLogPage();
     await ctx.reply(pg.text, {
       reply_markup: { inline_keyboard: buildLogsKeyboard(pg.page, pg.totalPages) },
+      link_preview_options: { is_disabled: true },
     });
   });
 

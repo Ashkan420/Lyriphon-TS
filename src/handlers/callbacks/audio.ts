@@ -47,7 +47,6 @@ export async function handleAudioDecisionCallback(ctx: Context, session: Session
       String(ctx.from?.id ?? ""),
       typeof lastData.trackId === "number" ? lastData.trackId : undefined,
       lastData.albumCoverUrl,
-      typeof lastData.albumId === "number" ? lastData.albumId : undefined,
     );
     const caption = await attachAudioAndPromptChannel(
       ctx.api,
@@ -164,9 +163,8 @@ export async function handleSendToChannelCallback(ctx: Context, session: Session
   const senderId = String(ctx.from?.id ?? "");
   if (trackName && artistName && (await isRichDeliveryActive(env.DB, senderId))) {
     const sessionCover = (session.telegraph.data as any)?.albumCoverUrl;
-    const sessionAlbum = (session.telegraph.data as any)?.albumId;
-    const richOpts = await resolveRichAudioOpts(env.DB, senderId, trackId, sessionCover, sessionAlbum);
-    const richOk = await sendRichAudio(ctx.api, Number(channelId), audioFileId, trackName, artistName, telegraphUrl, richOpts);
+    const richOpts = await resolveRichAudioOpts(env.DB, senderId, trackId, sessionCover);
+    const richOk = await sendRichAudio(ctx.api, Number(channelId), audioFileId, telegraphUrl, richOpts);
     if (richOk) {
       await ctx.editMessageText("✅ Sent to channel!");
       session.audio.pendingFileId = undefined;

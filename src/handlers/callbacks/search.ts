@@ -337,7 +337,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   // telegraph stays live so the user can still send another file to replace.
   if (autoGetForUser && !hasAudio && trackRecord?.file_id) {
     log("track pipeline: reusing stored audio for track", trackId);
-    const richOpts = await resolveRichAudioOpts(env.DB, requesterId, trackId, albumCoverUrl, albumId);
+    const richOpts = await resolveRichAudioOpts(env.DB, requesterId, trackId, albumCoverUrl);
     const caption = await attachAudioAndPromptChannel(
       ctx.api,
       env.DB,
@@ -357,7 +357,7 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
 
   // Attach audio and prompt channel AFTER sending Telegraph result
   if (hasAudio && pendingAudioFileId) {
-    const richOpts = await resolveRichAudioOpts(env.DB, String(ctx.from?.id ?? ""), trackId, albumCoverUrl, albumId);
+    const richOpts = await resolveRichAudioOpts(env.DB, String(ctx.from?.id ?? ""), trackId, albumCoverUrl);
     const caption = await attachAudioAndPromptChannel(
       ctx.api,
       env.DB,

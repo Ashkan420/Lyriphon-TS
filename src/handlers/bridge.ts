@@ -209,8 +209,6 @@ async function deliverFile(env: Env, audio: any, token: string): Promise<void> {
           api,
           row.chat_id,
           audio.file_id,
-          trackName,
-          artistName,
           row.telegraph_url,
           richOpts,
         ),

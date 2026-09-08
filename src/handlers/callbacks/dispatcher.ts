@@ -27,10 +27,10 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
     return;
   }
 
-  // Rich-style picker + its back button: checked before the generic
+  // Rich-delivery customizer + its back button: checked before the generic
   // settings_ prefix branch (settings_back collides with it).
   if (
-    data.startsWith("richstyle_") ||
+    data.startsWith("rich") ||
     data === "settings_richstyles" ||
     data === "settings_back"
   ) {

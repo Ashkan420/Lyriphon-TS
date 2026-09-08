@@ -1,5 +1,5 @@
 import { Context } from "grammy";
-import { formatLogPage } from "../../utils/logger";
+import { formatLogPage, LOG_PAGE_LATEST } from "../../utils/logger";
 import { safeAnswer } from "../../utils/telegram";
 
 type LogNavButton = {
@@ -49,12 +49,13 @@ export async function handleLogsPageCallback(ctx: Context) {
       page = n;
     }
   } else if (data === "logs_refresh") {
-    page = 0;
+    page = LOG_PAGE_LATEST;
   }
   const pg = formatLogPage(page);
   try {
     await ctx.editMessageText(pg.text, {
       reply_markup: { inline_keyboard: buildLogsKeyboard(pg.page, pg.totalPages) },
+      link_preview_options: { is_disabled: true },
     });
   } catch {
     // ignore "message is not modified" and edit races

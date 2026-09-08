@@ -7,7 +7,7 @@
 // established with AsyncLocalStorage via runWithLogScope() at the start of each
 // DO fetch (src/do.ts). Entries logged outside any scope (e.g. alarm-driven
 // deletes) land in the "_global" scope. /logs dumps the merged view across all
-// scopes, newest last.
+// scopes, oldest first.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { LOG_BUFFER_SIZE } from "../config";
@@ -93,7 +93,8 @@ export function getRecentLogs(limit = MAX): LogEntry[] {
   return getBuffer(currentScope()).slice(-limit);
 }
 
-// Merged view across every scope, oldest → newest (owner's /logs dump).
+// Merged view across every scope, oldest → newest (owner's /logs dump,
+// opened on the newest page).
 function allLogs(): LogEntry[] {
   const entries: LogEntry[] = [];
   for (const list of buffers.values()) entries.push(...list);
@@ -110,17 +111,20 @@ const LOG_PAGE_CONTENT_MAX = LOG_CHUNK_MAX - LOG_HEADER_RESERVE;
 
 export type LogPage = { text: string; page: number; totalPages: number };
 
-export function formatLogPage(page = 0): LogPage {
+// Sentinel for "the newest page" — the formatLogPage default and the refresh
+// target. The totalPages clamp resolves it to totalPages - 1.
+export const LOG_PAGE_LATEST = Number.MAX_SAFE_INTEGER;
+
+export function formatLogPage(page = LOG_PAGE_LATEST): LogPage {
   const logs = allLogs();
   if (logs.length === 0) {
     return { text: "📋 No logs yet.", page: 0, totalPages: 1 };
   }
 
-  // Newest-first so page 0 (what /logs opens on) shows recent activity.
-  // Fragments from a single oversized entry stay contiguous after the reverse.
-  const reversed = [...logs].reverse();
+  // Oldest-first, newest at the bottom: page 0 = oldest logs, the last page =
+  // the newest. /logs opens on the newest page (LOG_PAGE_LATEST).
   const fragments: string[] = [];
-  for (const entry of reversed) {
+  for (const entry of logs) {
     const time = new Date(entry.ts).toLocaleTimeString("en-US", { hour12: false });
     const levelTag = entry.level === "debug" ? "DBG" : entry.level.toUpperCase();
     let entryStr = `${time} [${levelTag}] ${entry.text}\n`;

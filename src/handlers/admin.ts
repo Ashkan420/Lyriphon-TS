@@ -2,7 +2,7 @@ import { Context } from "grammy";
 import { Env } from "../env";
 import { SessionDO } from "../do";
 import { SessionData } from "../session/types";
-import { formatLogPage, warn } from "../utils/logger";
+import { formatLogPage, warn, LOG_PAGE_LATEST } from "../utils/logger";
 import { safeAnswer } from "../utils/telegram";
 import { isAutoFetchEnabled, setAutoFetchEnabled, isRichDeliveryEnabled, setRichDeliveryEnabled } from "../db/settings";
 import { buildLogsNavRow } from "./callbacks/logs";
@@ -118,7 +118,7 @@ async function renderAdminSettings(
   }
 }
 
-async function renderAdminLogs(ctx: Context, page = 0): Promise<void> {
+async function renderAdminLogs(ctx: Context, page = LOG_PAGE_LATEST): Promise<void> {
   const pg = formatLogPage(page);
   const rows: AdminButton[][] = [];
   const nav = buildLogsNavRow(pg.page, pg.totalPages, "admin_logs_page_");
@@ -130,6 +130,7 @@ async function renderAdminLogs(ctx: Context, page = 0): Promise<void> {
   try {
     await ctx.editMessageText(pg.text, {
       reply_markup: { inline_keyboard: rows },
+      link_preview_options: { is_disabled: true },
     });
   } catch {
     // ignore
@@ -237,7 +238,7 @@ export async function handleAdminCallback(
     }
     const raw = data.slice("admin_logs_page_".length);
     const n = Number(raw);
-    await renderAdminLogs(ctx, Number.isNaN(n) ? 0 : n);
+    await renderAdminLogs(ctx, Number.isNaN(n) ? LOG_PAGE_LATEST : n);
     return;
   }
 
@@ -247,7 +248,7 @@ export async function handleAdminCallback(
       await renderAdminSettings(ctx, session, sessionDo, env);
       return;
     }
-    await renderAdminLogs(ctx, 0);
+    await renderAdminLogs(ctx);
     return;
   }
 

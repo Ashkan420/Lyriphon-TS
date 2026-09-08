@@ -19,6 +19,12 @@ import {
   isRichDeliveryActive,
   getUserRichStyle,
   setUserRichStyle,
+  getUserRichPosition,
+  setUserRichPosition,
+  getUserRichColor,
+  setUserRichColor,
+  getSetting,
+  setSetting,
 } from "../src/db/settings";
 
 // D1 stub with a real KV backing the settings table (same pattern as
@@ -117,14 +123,34 @@ describe("user preference helpers", () => {
     expect(await isRichDeliveryActive(db, "u1")).toBe(false);
   });
 
-  it("rich style pref defaults to 1 and persists a valid choice", async () => {
+  it("rich layout pref defaults to 1, persists 1|2, migrates old style 3", async () => {
     const db = fakeKvDb();
     expect(await getUserRichStyle(db, "u1")).toBe(1);
-    await setUserRichStyle(db, "u1", 3);
-    expect(await getUserRichStyle(db, "u1")).toBe(3);
-    // Out-of-range writes clamp to 1.
-    await setUserRichStyle(db, "u1", 9 as any);
+    await setUserRichStyle(db, "u1", 2);
+    expect(await getUserRichStyle(db, "u1")).toBe(2);
+    // Legacy "3" (removed art+credit layout) reads as layout 2.
+    await setSetting(db, "pref_richstyle:u1", "3");
+    expect(await getUserRichStyle(db, "u1")).toBe(2);
+    // Garbage reads as layout 1.
+    await setSetting(db, "pref_richstyle:u1", "9");
     expect(await getUserRichStyle(db, "u1")).toBe(1);
+  });
+
+  it("rich position and color prefs default and clamp", async () => {
+    const db = fakeKvDb();
+    expect(await getUserRichPosition(db, "u1")).toBe("center");
+    expect(await getUserRichColor(db, "u1")).toBe("primary");
+
+    await setUserRichPosition(db, "u1", "right");
+    await setUserRichColor(db, "u1", "success");
+    expect(await getUserRichPosition(db, "u1")).toBe("right");
+    expect(await getUserRichColor(db, "u1")).toBe("success");
+
+    // Invalid writes are ignored (defaults stand).
+    await setUserRichPosition(db, "u1", "diagonal" as any);
+    await setUserRichColor(db, "u1", "rainbow" as any);
+    expect(await getUserRichPosition(db, "u1")).toBe("right");
+    expect(await getUserRichColor(db, "u1")).toBe("success");
   });
 });
 

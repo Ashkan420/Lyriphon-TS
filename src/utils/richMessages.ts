@@ -302,8 +302,9 @@ export function buildTrackResultHtml(options: {
 
 // Experimental rich-message music delivery: the song as ONE rich message —
 // native audio bubble + a Lyrics button rendered in the body (tg-button-row)
-// instead of a reply_markup keyboard. Four selectable layouts (RichStyleId),
-// picked per-user in /settings.
+// instead of a reply_markup keyboard. Per-user knobs (all chosen in
+// /settings): layout (plain vs album-cover card), button position
+// (tg-button-row align) and button color (tg-button style).
 //
 // The media[] field on InputRichMessage and the tg-button tags are newer than
 // the pinned @grammyjs/types (3.28.0), so the payload is sent through a loose
@@ -311,69 +312,45 @@ export function buildTrackResultHtml(options: {
 
 const RICH_AUDIO_MEDIA_ID = "music1";
 
-export type RichStyleId = 1 | 2 | 3 | 4;
+export type RichLayoutId = 1 | 2;
+export type RichPosition = "left" | "center" | "right";
+export type RichColor = "default" | "primary" | "success" | "danger";
 
-export const RICH_STYLES: Record<RichStyleId, { name: string; description: string }> = {
+export const RICH_LAYOUTS: Record<RichLayoutId, { name: string; description: string }> = {
   1: {
-    name: "Button label",
-    description: "audio player + a button named after the song",
+    name: "Lyrics button",
+    description: "audio player + Lyrics button",
   },
   2: {
-    name: "Cover card",
+    name: "Cover + Lyrics",
     description: "album art on top, player, Lyrics button",
-  },
-  3: {
-    name: "Art + credit",
-    description: "album art with the song name under it, player, Lyrics button",
-  },
-  4: {
-    name: "Dual buttons",
-    description: "audio player + Lyrics and album download buttons",
   },
 };
 
 export function buildRichAudioDelivery(options: {
   fileId: string;
-  trackName: string;
-  artistName: string;
   telegraphUrl: string;
-  style?: RichStyleId;
+  layout?: RichLayoutId;
+  position?: RichPosition;
+  color?: RichColor;
   coverUrl?: string;
-  deezerUrl?: string;
 }): { html: string; media: Array<{ id: string; media: { type: "audio"; media: string } }> } {
   const esc = escapeRichHtml;
-  const style = options.style ?? 1;
+  const layout = options.layout ?? 1;
+  const position = options.position ?? "center";
+  const color = options.color ?? "primary";
   const audioBlock = `<figure><audio src="tg://audio?id=${RICH_AUDIO_MEDIA_ID}"></audio></figure>`;
-  const label = `${esc(options.trackName)} — ${esc(options.artistName)}`;
+  const styleAttr = color === "default" ? "" : ` style="${color}"`;
   const lyricsButton =
-    `<tg-button type="url" style="primary" url="${esc(options.telegraphUrl)}">Lyrics</tg-button>`;
+    `<tg-button type="url"${styleAttr} url="${esc(options.telegraphUrl)}">Lyrics</tg-button>`;
 
-  let html: string;
-  if (style === 2 && options.coverUrl) {
-    html = `<img src="${esc(options.coverUrl)}"/>\n${audioBlock}\n` +
-      `<tg-button-row align="center">${lyricsButton}</tg-button-row>`;
-  } else if (style === 3 && options.coverUrl) {
-    html =
-      `<figure><img src="${esc(options.coverUrl)}"/><figcaption>${label}</figcaption></figure>\n` +
-      `${audioBlock}\n` +
-      `<tg-button-row align="center">${lyricsButton}</tg-button-row>`;
-  } else if (style === 4 && options.deezerUrl) {
-    html = `${audioBlock}\n` +
-      `<tg-button-row align="center">` +
-      `${lyricsButton}` +
-      `<tg-button type="url" style="link" url="${esc(options.deezerUrl)}">💽 Album</tg-button>` +
-      `</tg-button-row>`;
-  } else {
-    // Style 1 and every degraded case (2/3 without cover, 4 without the
-    // deezer URL): the audio bubble renders the file's own title/performer
-    // natively, so no text blocks — the button carries the song name.
-    html = `${audioBlock}\n` +
-      `<tg-button-row align="center">` +
-      `<tg-button type="url" style="primary" url="${esc(options.telegraphUrl)}">` +
-      `${label}` +
-      `</tg-button>` +
-      `</tg-button-row>`;
-  }
+  // Layout 2 without a cover degrades to layout 1's body (the audio bubble
+  // renders the file's own title/performer natively, so no text blocks).
+  const html =
+    layout === 2 && options.coverUrl
+      ? `<img src="${esc(options.coverUrl)}"/>\n${audioBlock}\n` +
+        `<tg-button-row align="${position}">${lyricsButton}</tg-button-row>`
+      : `${audioBlock}\n<tg-button-row align="${position}">${lyricsButton}</tg-button-row>`;
 
   return {
     html,
@@ -385,11 +362,48 @@ export function buildRichAudioDelivery(options: {
   };
 }
 
+// Interactive option demos for the /settings picker: the Lyrics button is
+// rendered once per option as a clickable callback tg-button, so the user
+// taps the look they want. The demo needs a player bubble to anchor the
+// buttons; any valid file_id works.
+export function buildRichOptionDemo(kind: "position" | "color", demoFileId: string): {
+  html: string;
+  media: Array<{ id: string; media: { type: "audio"; media: string } }>;
+} {
+  const audioBlock = `<figure><audio src="tg://audio?id=${RICH_AUDIO_MEDIA_ID}"></audio></figure>`;
+  let rows: string;
+  if (kind === "position") {
+    const row = (align: RichPosition, data: string, mark: string) =>
+      `<tg-button-row align="${align}">` +
+      `<tg-button type="callback_data" data="${data}">Lyrics ${mark}</tg-button></tg-button-row>`;
+    rows = [
+      row("left", "richpos_left", "◀️"),
+      row("center", "richpos_center", "⏺"),
+      row("right", "richpos_right", "▶️"),
+    ].join("\n");
+  } else {
+    const btn = (style: RichColor, data: string) =>
+      `<tg-button type="callback_data"${style === "default" ? "" : ` style="${style}"`} data="${data}">Lyrics</tg-button>`;
+    rows =
+      `<tg-button-row align="center">` +
+      btn("default", "richcol_default") +
+      btn("primary", "richcol_primary") +
+      btn("success", "richcol_success") +
+      btn("danger", "richcol_danger") +
+      `</tg-button-row>`;
+  }
+  return {
+    html: `${audioBlock}\n${rows}`,
+    media: [{ id: RICH_AUDIO_MEDIA_ID, media: { type: "audio", media: demoFileId } }],
+  };
+}
+
 // Options every delivery site resolves once and hands to sendRichAudio.
 export interface RichAudioOpts {
-  style?: RichStyleId;
+  layout?: RichLayoutId;
+  position?: RichPosition;
+  color?: RichColor;
   coverUrl?: string;
-  deezerUrl?: string;
 }
 
 // Send the rich audio delivery. Returns the sent message, or null on any
@@ -400,18 +414,10 @@ export async function sendRichAudio(
   api: Api<RawApi>,
   chatId: number,
   fileId: string,
-  trackName: string,
-  artistName: string,
   telegraphUrl: string,
   opts?: RichAudioOpts,
 ): Promise<{ message_id: number } | null> {
-  const { html, media } = buildRichAudioDelivery({
-    fileId,
-    trackName,
-    artistName,
-    telegraphUrl,
-    ...opts,
-  });
+  const { html, media } = buildRichAudioDelivery({ fileId, telegraphUrl, ...opts });
   try {
     const msg = await (api as any).sendRichMessage(chatId, {
       html,

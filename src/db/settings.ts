@@ -84,18 +84,43 @@ export async function setUserRichDeliveryEnabled(db: D1Database, userId: string,
   await setSetting(db, `${SETTING_USER_RICH_PREFIX}${userId}`, enabled ? "1" : "0");
 }
 
-// Per-user rich layout choice ("1".."4"). Missing/garbage row = style 1, so
-// users who never open the picker keep the original delivery look.
+// Per-user rich-delivery knobs. Missing/garbage rows = the defaults (layout
+// 1, center, primary), so users who never open the picker keep the standard
+// look. Legacy style "3" (old art+credit layout) maps to layout 2.
 export const SETTING_USER_RICHSTYLE_PREFIX = "pref_richstyle:";
+export const SETTING_USER_RICHPOS_PREFIX = "pref_richpos:";
+export const SETTING_USER_RICHCOLOR_PREFIX = "pref_richcolor:";
 
-export async function getUserRichStyle(db: D1Database, userId: string): Promise<1 | 2 | 3 | 4> {
+const RICH_POSITIONS = ["left", "center", "right"] as const;
+const RICH_COLORS = ["default", "primary", "success", "danger"] as const;
+
+export async function getUserRichStyle(db: D1Database, userId: string): Promise<1 | 2> {
   const raw = await getSetting(db, `${SETTING_USER_RICHSTYLE_PREFIX}${userId}`);
-  return raw === "2" || raw === "3" || raw === "4" ? (Number(raw) as 1 | 2 | 3 | 4) : 1;
+  return raw === "2" || raw === "3" ? 2 : 1;
 }
 
-export async function setUserRichStyle(db: D1Database, userId: string, style: 1 | 2 | 3 | 4): Promise<void> {
-  const clamped = style === 2 || style === 3 || style === 4 ? style : 1;
-  await setSetting(db, `${SETTING_USER_RICHSTYLE_PREFIX}${userId}`, String(clamped));
+export async function setUserRichStyle(db: D1Database, userId: string, layout: 1 | 2): Promise<void> {
+  await setSetting(db, `${SETTING_USER_RICHSTYLE_PREFIX}${userId}`, layout === 2 ? "2" : "1");
+}
+
+export async function getUserRichPosition(db: D1Database, userId: string): Promise<(typeof RICH_POSITIONS)[number]> {
+  const raw = await getSetting(db, `${SETTING_USER_RICHPOS_PREFIX}${userId}`);
+  return (RICH_POSITIONS as readonly string[]).includes(raw ?? "") ? (raw as (typeof RICH_POSITIONS)[number]) : "center";
+}
+
+export async function setUserRichPosition(db: D1Database, userId: string, position: (typeof RICH_POSITIONS)[number]): Promise<void> {
+  if (!(RICH_POSITIONS as readonly string[]).includes(position)) return;
+  await setSetting(db, `${SETTING_USER_RICHPOS_PREFIX}${userId}`, position);
+}
+
+export async function getUserRichColor(db: D1Database, userId: string): Promise<(typeof RICH_COLORS)[number]> {
+  const raw = await getSetting(db, `${SETTING_USER_RICHCOLOR_PREFIX}${userId}`);
+  return (RICH_COLORS as readonly string[]).includes(raw ?? "") ? (raw as (typeof RICH_COLORS)[number]) : "primary";
+}
+
+export async function setUserRichColor(db: D1Database, userId: string, color: (typeof RICH_COLORS)[number]): Promise<void> {
+  if (!(RICH_COLORS as readonly string[]).includes(color)) return;
+  await setSetting(db, `${SETTING_USER_RICHCOLOR_PREFIX}${userId}`, color);
 }
 
 // The effective gate all delivery sites use. D1 failure degrades to plain

@@ -7,10 +7,9 @@ import { transition } from "../session/transitions";
 import { resetFlow } from "../session/flows";
 import { escapeMd as escapeMdUtil } from "./escapeMd";
 import { log, warn } from "./logger";
-import { isRichDeliveryActive, getUserRichStyle } from "../db/settings";
-import { sendRichAudio, RichAudioOpts } from "./richMessages";
+import { isRichDeliveryActive, getUserRichStyle, getUserRichPosition, getUserRichColor } from "../db/settings";
+import { sendRichAudio, RichAudioOpts, RichPosition, RichColor } from "./richMessages";
 import { getTrack } from "../services/deezer";
-import { DEEZLOAD_BOT } from "../config";
 import type { InlineKeyboardMarkup } from "@grammyjs/types";
 
 export function formatDuration(seconds: number): string {
@@ -156,8 +155,8 @@ export function buildAudioCaption(trackName: string, artistName: string, telegra
   return `>\`${trackNameMd} — ${artistNameMd}\`${hiddenLink}`;
 }
 
-// Fetch an album cover URL from Deezer for rich styles 2/3. Returns
-// undefined on any failure — the style engine degrades to the no-cover body.
+// Fetch an album cover URL from Deezer for rich layout 2. Returns undefined
+// on any failure — the style engine degrades to the no-cover body.
 export async function fetchCoverUrl(trackId: number): Promise<string | undefined> {
   try {
     const t = (await getTrack(trackId)) as any;
@@ -167,50 +166,34 @@ export async function fetchCoverUrl(trackId: number): Promise<string | undefined
   }
 }
 
-// Style 4's second button: the deezload album link for the track's release
-// (same URL the Telegraph page's 💽 Album entry uses). Undefined on failure —
-// the style engine degrades to the single-button body.
-export async function fetchAlbumDeezerUrl(trackId: number): Promise<string | undefined> {
-  try {
-    const t = (await getTrack(trackId)) as any;
-    return t?.album?.id ? `${DEEZLOAD_BOT}deezertalbum${t.album.id}` : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-// Resolve the user's rich-style options for a real delivery: read the style
-// pref, and only fetch from Deezer when the chosen layout needs it (covers
-// for styles 2/3, the album id for style 4's deezload button). Everything
-// degrades to undefined on failure — style engine then renders the style-1
-// body.
+// Resolve the user's rich-delivery options for a real delivery: read the
+// layout/position/color prefs, and only fetch from Deezer when the chosen
+// layout needs it (cover for layout 2). Everything degrades on failure — the
+// style engine then renders the layout-1 body.
 export async function resolveRichAudioOpts(
   db: D1Database,
   userId: string,
   trackId: number | undefined,
   coverUrl?: string,
-  albumId?: number,
 ): Promise<RichAudioOpts> {
-  let style: 1 | 2 | 3 | 4 = 1;
+  let layout: 1 | 2 = 1;
+  let position: RichPosition = "center";
+  let color: RichColor = "primary";
   try {
-    style = await getUserRichStyle(db, userId);
+    [layout, position, color] = await Promise.all([
+      getUserRichStyle(db, userId),
+      getUserRichPosition(db, userId),
+      getUserRichColor(db, userId),
+    ]);
   } catch {
-    // fail closed to style 1
+    // fail closed to defaults
   }
-  const opts: RichAudioOpts = { style };
-  if (style === 2 || style === 3) {
+  const opts: RichAudioOpts = { layout, position, color };
+  if (layout === 2) {
     if (coverUrl) {
       opts.coverUrl = coverUrl;
     } else if (trackId) {
       opts.coverUrl = await fetchCoverUrl(trackId);
-    }
-  } else if (style === 4) {
-    if (albumId) {
-      opts.deezerUrl = `${DEEZLOAD_BOT}deezertalbum${albumId}`;
-    } else if (trackId) {
-      // Call sites without session state (bridge) know only the track —
-      // look the album up once.
-      opts.deezerUrl = await fetchAlbumDeezerUrl(trackId);
     }
   }
   return opts;
@@ -235,7 +218,7 @@ export async function attachAudioAndPromptChannel(
   // the toggle is off or the rich send fails.
   if (await isRichDeliveryActive(db, userId)) {
     const opts = richOpts ?? (await resolveRichAudioOpts(db, userId, undefined, undefined));
-    const richOk = await sendRichAudio(bot, chatId, fileId, trackName, artistName, telegraphUrl, opts);
+    const richOk = await sendRichAudio(bot, chatId, fileId, telegraphUrl, opts);
     if (richOk) {
       session.audio.pendingFileId = fileId;
       session.audio.pendingCaption = caption;
