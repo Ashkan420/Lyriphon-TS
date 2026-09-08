@@ -19,6 +19,7 @@ import { StringSession } from "teleproto/sessions";
 import { ConnectionTCPFull } from "teleproto/network/connection";
 import { Raw } from "teleproto/events/Raw";
 import { WorkersTcpSocket } from "./socket";
+import { log } from "../utils/logger";
 
 export const DEEZLOAD_USERNAME = "deezload2bot";
 
@@ -430,36 +431,49 @@ export class BridgeJobs {
   }
 
   /**
-   * Fetch a whole album with ONE deezload command (`/start
-   * deezertalbum<id>` — spamming N per-track commands is what froze the
-   * bot). Resolves when the stream goes quiet: deezload sends the files one
-   * by one; each audio resets an inactivity timer, and when the timer fires
-   * (quiet period) the stream is considered done. Each audio is forwarded
-   * into the bridge DM and tagged `lyq:albumfile req=<token> idx=<n>` so the
-   * webhook can pair arrivals to batch rows. Serial job execution in
-   * BridgeDO guarantees no other job interleaves with the stream.
-   * Returns the number of audios forwarded.
+   * Fetch a whole album with ONE deezload interaction, reproducing the
+   * manual flow: `/start deezertalbum<id>` → deezload replies with the
+   * album view (photo/text + one callback row per song + GET ALL) → click
+   * GET ALL (`messages.GetBotCallbackAnswer` with the button's callback
+   * data) → deezload streams the album's audios. Each audio is forwarded
+   * into the bridge DM and tagged `lyq:albumfile req=<token> idx=<n>` so
+   * the webhook can pair arrivals to batch rows; when the stream goes quiet
+   * (inactivity timer reset by every arrival) it sends
+   * `lyq:albumdone req=<token> count=<k>`. Serial job execution in BridgeDO
+   * guarantees no other job interleaves with the stream. Returns the number
+   * of audios forwarded.
    */
   async fetchAlbum(albumId: number, bridgePeer: string, token: string): Promise<number> {
     const client = await this.bridge.get();
     const deezload = await client.getEntity(DEEZLOAD_USERNAME);
+
+    // Deezload's album view is a fast, cached reply — the event listener
+    // MUST be armed before the /start lands, or the view is missed and the
+    // job silently waits out its timeout.
+    const viewPromise = this.waitForAlbumView(client, deezload, albumId);
+    const audioPromise = this.collectAlbumAudio(client, albumId);
 
     await client.sendMessage(deezload, {
       message: `/start deezertalbum${albumId}`,
       linkPreview: false,
     });
 
-    // Deezload's album view: the first reply message carrying callback
-    // buttons (photo+buttons or text+buttons).
-    const view = await this.waitForAlbumView(client, albumId);
+    const view = await viewPromise;
+    if (!view) {
+      audioPromise.catch(() => {});
+      throw new Error(`no album view from deezload for album ${albumId}`);
+    }
 
     // Press GET ALL⬇️: find the button whose data starts with the album
     // down-token (`album/<id>/down`) and answer its callback.
-    const target = this.collectCallbackButtons(view).find(
-      (b) => b.data && bytesStartsWith(b.data, `album/${albumId}/down`),
-    );
+    const buttons = this.collectCallbackButtons(view);
+    const target = buttons.find((b) => b.data && bytesStartsWith(b.data, `album/${albumId}/down`));
     if (!target) {
-      throw new Error(`deezload album view for ${albumId} has no GET ALL button`);
+      audioPromise.catch(() => {});
+      throw new Error(
+        `deezload album view for ${albumId} has no GET ALL button ` +
+        `(buttons: ${buttons.map((b) => `"${b.text}"`).join(", ") || "none"})`,
+      );
     }
     await client.invoke(
       new Api.messages.GetBotCallbackAnswer({
@@ -469,9 +483,14 @@ export class BridgeJobs {
         data: target.data as any,
       }),
     );
+    log(`bridge: pressed GET ALL for album ${albumId}`);
 
-    // Collect the streamed audios until the stream goes quiet.
-    const audios = await this.collectAlbumAudio(client, albumId);
+    // Detach the audio collector's rejection path: any failure below must
+    // not leave it dangling as an unhandled rejection.
+    audioPromise.catch(() => {});
+
+    const audios = await audioPromise;
+    log(`bridge: album ${albumId} stream quiet, ${audios.length} audio(s)`);
 
     // Forward each audio into the bridge DM with its arrival-order tag.
     for (let i = 0; i < audios.length; i++) {
@@ -498,11 +517,22 @@ export class BridgeJobs {
   }
 
   // The album view is the first message deezload posts after /start that
-  // carries any inline keyboard (photo+buttons or text+buttons).
-  private async waitForAlbumView(client: TelegramClient, albumId: number): Promise<Api.Message> {
-    return new Promise<Api.Message>((resolve, reject) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
+  // carries any inline keyboard (photo+buttons or text+buttons). The live
+  // listener is armed BEFORE the /start lands (cached views can beat a
+  // late-registered listener); a periodic getMessages poll is the backstop
+  // for view updates the live stream misses. Resolves null on timeout so
+  // the caller can poll-fail gracefully.
+  private async waitForAlbumView(client: TelegramClient, deezload: any, albumId: number): Promise<Api.Message | null> {
+    return new Promise<Api.Message | null>((resolve) => {
       let settled = false;
+      let poll: ReturnType<typeof setInterval> | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      const cleanup = () => {
+        clearInterval(poll);
+        clearTimeout(timer);
+        client.removeEventHandler(handler, raw);
+      };
 
       const handler = (update: any) => {
         if (settled) return;
@@ -518,18 +548,36 @@ export class BridgeJobs {
       };
 
       const raw = new Raw({});
-      const cleanup = () => {
-        clearTimeout(timer);
-        client.removeEventHandler(handler, raw);
-      };
+      client.addEventHandler(handler, raw);
+
+      // Backstop poll: scan recent deezload messages for a keyboard, in
+      // case the NewMessage update never reaches the live handler.
+      poll = setInterval(() => {
+        void (async () => {
+          if (settled) return;
+          try {
+            const msgs = await client.getMessages(deezload, { limit: 5 });
+            for (const m of msgs) {
+              const rows = (m as any).replyMarkup?.rows;
+              if (Array.isArray(rows) && rows.length) {
+                settled = true;
+                cleanup();
+                resolve(m as unknown as Api.Message);
+                return;
+              }
+            }
+          } catch {
+            // transient — next tick retries
+          }
+        })();
+      }, 4000);
+
       timer = setTimeout(() => {
         if (settled) return;
         settled = true;
         cleanup();
-        reject(new Error(`no album view from deezload for album ${albumId} within timeout`));
+        resolve(null);
       }, DEEZLOAD_AUDIO_TIMEOUT_MS);
-
-      client.addEventHandler(handler, raw);
     });
   }
 

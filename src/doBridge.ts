@@ -319,7 +319,20 @@ export class BridgeDO {
     try {
       const { getRequestByToken, isRequestExpired, setRequestStatus } = await import("./db/audioRequests");
       const row = await getRequestByToken(this.env.DB, token);
-      if (!row || row.status !== "pending" || isRequestExpired(row)) return;
+      if (!row) {
+        // Album jobs carry the BATCH token — no audio_requests row exists.
+        // Fail the batch (its selected pending rows) and nudge the assembly,
+        // which edits the run's status message with the failure receipt.
+        const { getAlbumBatch } = await import("./db/albumBatches");
+        const batch = await getAlbumBatch(this.env.DB, token);
+        if (batch && batch.status === "pending") {
+          const { failAlbumBatch } = await import("./handlers/album");
+          await failAlbumBatch(this.env, token);
+          log("BridgeDO: album job failed, batch failed", JSON.stringify({ token, reason }));
+        }
+        return;
+      }
+      if (row.status !== "pending" || isRequestExpired(row)) return;
       await setRequestStatus(this.env.DB, token, "failed");
       // Fresh read for the notice id: it's persisted by the track pipeline
       // after enqueue and can land while this failure is being processed.
