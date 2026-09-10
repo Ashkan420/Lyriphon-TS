@@ -19,30 +19,17 @@ import { StringSession } from "teleproto/sessions";
 import { ConnectionTCPFull } from "teleproto/network/connection";
 import { Raw } from "teleproto/events/Raw";
 import { WorkersTcpSocket } from "./socket";
+import {
+  describeButtons,
+  extractButtonAction,
+  findGetAllButton,
+  isFreshView,
+  parseStartParamFor,
+  ViewButtonInfo,
+} from "./viewMatch";
 import { log, warn } from "../utils/logger";
 
 export const DEEZLOAD_USERNAME = "deezload2bot";
-
-// Callback data is TL bytes; compare against an ASCII prefix byte by byte.
-function bytesStartsWith(bytes: Uint8Array, ascii: string): boolean {
-  if (bytes.length < ascii.length) return false;
-  for (let i = 0; i < ascii.length; i++) {
-    if (bytes[i] !== ascii.charCodeAt(i)) return false;
-  }
-  return true;
-}
-
-// Decode TL bytes to a printable ASCII string (non-printables → '?') — for
-// logging what a button's callback data actually contains.
-function bytesToAscii(bytes: Uint8Array | undefined, max = 64): string {
-  if (!bytes) return "";
-  let out = "";
-  for (let i = 0; i < Math.min(bytes.length, max); i++) {
-    const c = bytes[i];
-    out += c >= 32 && c < 127 ? String.fromCharCode(c) : "?";
-  }
-  return out;
-}
 
 const DEEZLOAD_AUDIO_TIMEOUT_MS = 180000;
 // Album stream: silence of this length after the last audio means deezload
@@ -478,48 +465,82 @@ export class BridgeJobs {
       linkPreview: false,
     });
 
-    const view = await viewPromise;
-    if (!view) {
+    const found = await viewPromise;
+    if (!found) {
       audioPromise.catch(() => {});
-      await this.dumpRecentMessages(client, deezload, albumId);
-      throw new Error(`no album view from deezload for album ${albumId}`);
-    }
-
-    // Press GET ALL⬇️: find the button whose data starts with the album
-    // down-token (`album/<id>/down`) and answer its callback.
-    const buttons = this.collectCallbackButtons(view);
-    const target = buttons.find((b) => b.data && bytesStartsWith(b.data, `album/${albumId}/down`));
-    if (!target) {
-      audioPromise.catch(() => {});
+      const dump = await this.dumpRecentMessages(client, deezload, albumId);
       throw new Error(
-        `deezload album view for ${albumId} has no GET ALL button ` +
-        `(buttons: ${buttons.map((b) => `"${b.text}"`).join(", ") || "none"})`,
+        `no album view from deezload for album ${albumId} | ${dump.slice(0, 800)}`,
       );
     }
-    try {
-      await client.invoke(
-        new Api.messages.GetBotCallbackAnswer({
-          peer: deezload,
-          msgId: view.id,
-          // The button's data is already the exact TL bytes to echo back.
-          data: target.data as any,
-        }),
-      );
-      log(`bridge: pressed GET ALL for album ${albumId}`);
-    } catch (error) {
-      // The answer RPC can time out (deezload is busy preparing the album
-      // and answers the callback slowly) while still acting on the press —
-      // bots commonly process clicks after the ~10s MTProto answer window.
-      // Treat the press as best-effort: the audio stream is the real signal.
-      warn(`bridge: GET ALL answer for album ${albumId} errored (press may still have landed)`, error);
-    }
+    const { msg: view, button: target, how } = found;
 
-    // Detach the audio collector's rejection path: any failure below must
-    // not leave it dangling as an unhandled rejection.
+    // Press GET ALL however deezload renders it. Expected path: a callback
+    // button (album/<id>/down bytes) answered via GetBotCallbackAnswer; the
+    // other branches cover format variants — deep-link url, label-matched
+    // callback, and (only if a button truly has no action) the reply-
+    // keyboard-style text send.
     audioPromise.catch(() => {});
+    if (how !== "data") {
+      // Non-data press — dump the keyboard so the exact action shape is
+      // visible in Workers Logs (and in the failure reason if 0 audios).
+      log(
+        `bridge: album ${albumId} GET ALL matched by ${how}; keyboard: ` +
+        describeButtons(this.collectCallbackButtons(view)).slice(0, 1500),
+      );
+    }
+    if (target.data) {
+      // The button carries callback data (token-matched or label-matched on
+      // a fresh view — the freshness guarantee makes the label authoritative).
+      await this.pressCallbackAnswer(
+        client,
+        deezload,
+        view.id,
+        target.data,
+        albumId,
+        how === "data" ? "token-matched" : "label-matched",
+      );
+    } else {
+      const startParam = target.url ? parseStartParamFor(target.url, DEEZLOAD_USERNAME) : null;
+      if (startParam) {
+        // Deep-link button: a manual tap sends /start <param>.
+        await client.sendMessage(deezload, {
+          message: `/start ${startParam}`,
+          linkPreview: false,
+        });
+        log(`bridge: sent GET ALL deep link for album ${albumId} (/start ${startParam})`);
+      } else if (target.text.trim()) {
+        // No data, no usable url: last resort — send the button's text
+        // verbatim (reply-keyboard-style tap). Deezload treats unrecognized
+        // input as a search prompt, so this is genuinely last.
+        await client.sendMessage(deezload, {
+          message: target.text,
+          linkPreview: false,
+        });
+        log(`bridge: sent GET ALL text for album ${albumId} ("${target.text}", matched by ${how})`);
+      } else {
+        // Degenerate: no actionable field at all. Best-effort fallback.
+        await client.sendMessage(deezload, {
+          message: `/start album/${albumId}/down`,
+          linkPreview: false,
+        });
+        log(`bridge: sent fallback GET ALL /start for album ${albumId} (matched by ${how})`);
+      }
+    }
 
     const audios = await audioPromise;
     log(`bridge: album ${albumId} stream quiet, ${audios.length} audio(s)`);
+
+    // Zero audios from a FRESH view = the press didn't take (a real run
+    // showed deezload silently ignoring an unpressed view). Fail loudly —
+    // "0 of 13 delivered" hides the real story otherwise.
+    if (!audios.length) {
+      const dump = await this.dumpRecentMessages(client, deezload, albumId);
+      throw new Error(
+        `deezload streamed 0 audios for album ${albumId} — GET ALL press ` +
+        `(matched by ${how}) did not take | ${dump.slice(0, 800)}`,
+      );
+    }
 
     // Forward each audio into the bridge DM with its arrival-order tag.
     for (let i = 0; i < audios.length; i++) {
@@ -545,34 +566,62 @@ export class BridgeJobs {
     return audios.length;
   }
 
+  // Answer a callback button, ONCE, best-effort: a slow bot answers the
+  // click after the ~10s MTProto window (BOT_RESPONSE_TIMEOUT) — the press
+  // itself has already landed. Retrying is a SECOND press: a real run
+  // double-pressed this way and deezload streamed the whole album twice
+  // (26 forwards for 13 tracks). Never retry; the audio stream is the
+  // signal, and the 0-audio failure path catches a press that truly
+  // didn't land.
+  private async pressCallbackAnswer(
+    client: TelegramClient,
+    deezload: any,
+    msgId: number,
+    data: Uint8Array,
+    albumId: number,
+    label: string,
+  ): Promise<void> {
+    try {
+      await client.invoke(
+        new Api.messages.GetBotCallbackAnswer({
+          peer: deezload,
+          msgId,
+          // The button's data is already the exact TL bytes to echo back.
+          data: data as any,
+        }),
+      );
+      log(`bridge: pressed GET ALL for album ${albumId} (callback, ${label})`);
+    } catch (error) {
+      // Press landed or didn't — do NOT send another. The stream decides.
+      warn(`bridge: GET ALL answer for album ${albumId} errored (press counted as landed)`, error);
+    }
+  }
+
   // The album view is the message whose keyboard actually contains the GET
-  // ALL button for this album (data prefix `album/<id>/down`) — NOT just any
-  // keyboard: deezload's DM keeps stale views from earlier runs and menus,
-  // and a loose matcher presses/waits on the wrong message. The live
-  // listener is armed BEFORE the /start lands; a periodic getMessages poll
-  // is the backstop for updates the live stream misses. Resolves null on
-  // timeout so the caller can fail gracefully.
+  // ALL button for this album — matched by callback-data prefix, URL, or
+  // label (see findGetAllButton) — NOT just any keyboard: deezload's DM keeps
+  // stale views from earlier runs and menus, and a loose matcher
+  // presses/waits on the wrong message. The live listener is armed BEFORE
+  // the /start lands; a periodic getMessages poll is the backstop for
+  // updates the live stream misses. Resolves null on timeout so the caller
+  // can fail gracefully.
   private async waitForAlbumView(
     client: TelegramClient,
     deezload: any,
     albumId: number,
     startedAt: number,
-  ): Promise<Api.Message | null> {
-    const hasGetAll = (msg: any): boolean => {
-      const rows = msg?.replyMarkup?.rows;
-      if (!Array.isArray(rows)) return false;
-      return this.collectCallbackButtons(msg as Api.Message).some(
-        (b) => b.data && bytesStartsWith(b.data, `album/${albumId}/down`),
-      );
+  ): Promise<{ msg: Api.Message; button: ViewButtonInfo; how: "data" | "url" | "text" } | null> {
+    const matchView = (msg: any) => {
+      const buttons = this.collectCallbackButtons(msg as Api.Message);
+      const found = findGetAllButton(buttons, albumId);
+      return found ? { buttons, ...found } : null;
     };
-    // Cross-sequence-safe freshness: message DATE, not id (each private-chat
-    // participant has an independent id sequence in raw MTProto). One minute
-    // of slack for clock skew; also accepts edits — deezload may re-render
-    // an existing view instead of posting a new one.
-    const isFresh = (msg: any): boolean =>
-      typeof msg?.date === "number" && msg.date >= startedAt - 60;
 
-    return new Promise<Api.Message | null>((resolve) => {
+    let sawKeyboardMsg = false;
+    let updatesSeen = 0;
+    let pollErrorLogged = false;
+
+    return new Promise<{ msg: Api.Message; button: ViewButtonInfo; how: "data" | "url" | "text" } | null>((resolve) => {
       let settled = false;
       let poll: ReturnType<typeof setInterval> | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -585,17 +634,31 @@ export class BridgeJobs {
 
       const handler = (update: any) => {
         if (settled) return;
+        updatesSeen++;
         // New posts and edits both carry .message; deezload may edit its
         // existing view instead of posting a fresh one.
         const msg = update?.message;
         if (!msg || typeof msg.id !== "number") return;
-        if (!isFresh(msg) || !hasGetAll(msg)) {
-          return; // a menu / stale view / status text — keep waiting
+        if (!isFreshView(msg, startedAt)) {
+          return; // stale view / older menu — keep waiting
+        }
+        const found = matchView(msg);
+        if (!found) {
+          // A fresh keyboard that doesn't match is diagnostic gold — say so
+          // once instead of failing silently for 180s.
+          if (!sawKeyboardMsg && this.collectCallbackButtons(msg as Api.Message).length) {
+            sawKeyboardMsg = true;
+            warn(
+              `bridge: album ${albumId} fresh keyboard seen but no GET ALL match ` +
+              `(buttons: ${describeButtons(this.collectCallbackButtons(msg as Api.Message))})`,
+            );
+          }
+          return;
         }
         settled = true;
         cleanup();
-        log(`bridge: album ${albumId} view received (msg ${msg.id}, date ${msg.date})`);
-        resolve(msg as Api.Message);
+        log(`bridge: album ${albumId} view received (msg ${msg.id}, date ${msg.date}, matched ${found.how})`);
+        resolve({ msg: msg as Api.Message, button: found.button, how: found.how });
       };
 
       const raw = new Raw({});
@@ -607,36 +670,59 @@ export class BridgeJobs {
           try {
             const msgs = await client.getMessages(deezload, { limit: 5 });
             for (const m of msgs) {
-              if (isFresh(m) && hasGetAll(m)) {
+              if (settled) return;
+              if (!isFreshView(m, startedAt)) continue;
+              const found = matchView(m);
+              if (found) {
                 settled = true;
                 cleanup();
-                log(`bridge: album ${albumId} view found by poll (msg ${(m as any).id})`);
-                resolve(m as unknown as Api.Message);
+                log(`bridge: album ${albumId} view found by poll (msg ${(m as any).id}, matched ${found.how})`);
+                resolve({ msg: m as unknown as Api.Message, button: found.button, how: found.how });
                 return;
               }
+              // Same one-time diagnostic as the live handler.
+              if (!sawKeyboardMsg && this.collectCallbackButtons(m as Api.Message).length) {
+                sawKeyboardMsg = true;
+                warn(
+                  `bridge: album ${albumId} fresh keyboard seen (poll) but no GET ALL match ` +
+                  `(buttons: ${describeButtons(this.collectCallbackButtons(m as Api.Message))})`,
+                );
+              }
             }
-          } catch {
-            // transient — next tick retries
+          } catch (error) {
+            // Log once — a silently dead poll looks identical to a missing view.
+            if (!pollErrorLogged) {
+              pollErrorLogged = true;
+              warn("bridge: album view poll getMessages failed", error);
+            }
           }
         })();
       }, 4000);
+
+      const describeTimeoutState = () =>
+        `updates seen: ${updatesSeen}, fresh keyboard seen: ${sawKeyboardMsg}`;
 
       timer = setTimeout(() => {
         if (settled) return;
         settled = true;
         cleanup();
+        log(`bridge: album ${albumId} view wait timed out (${describeTimeoutState()})`);
         resolve(null);
       }, DEEZLOAD_AUDIO_TIMEOUT_MS);
     });
   }
 
-  // Flatten replyMarkup rows into {text, data} callback buttons.
-  private collectCallbackButtons(msg: Api.Message): Array<{ text: string; data?: Uint8Array }> {
-    const out: Array<{ text: string; data?: Uint8Array }> = [];
+  // Flatten replyMarkup rows into {text, data, url, …} buttons. teleproto's
+  // fork parses inline buttons as KeyboardInlineButton { text, type:
+  // InlineButtonType{data|url|query} } — the action is nested inside `type`
+  // (see extractButtonAction). Reading btn.data directly found nothing, so
+  // every button looked inert and the GET ALL press never fired.
+  private collectCallbackButtons(msg: Api.Message): ViewButtonInfo[] {
+    const out: ViewButtonInfo[] = [];
     const rows = (msg.replyMarkup as any)?.rows ?? [];
     for (const row of rows) {
       for (const btn of row.buttons ?? []) {
-        out.push({ text: String(btn.text ?? ""), data: btn.data });
+        out.push({ text: String(btn.text ?? ""), ...extractButtonAction(btn) });
       }
     }
     return out;
@@ -683,24 +769,27 @@ export class BridgeJobs {
     });
   }
 
-  // Timeout diagnostic: log what the recent deezload messages actually look
-  // like (id, date, keyboard presence, decoded callback data) so a matcher
-  // mismatch is visible in wrangler tail instead of a bare timeout.
-  private async dumpRecentMessages(client: TelegramClient, deezload: any, albumId: number): Promise<void> {
+  // Timeout diagnostic: log AND return what the recent deezload messages
+  // actually look like (id, date, every button with its action) so a matcher
+  // mismatch is visible in Workers Logs AND travels with the failure reason
+  // into the batch status message and the owner DM.
+  private async dumpRecentMessages(client: TelegramClient, deezload: any, albumId: number): Promise<string> {
     try {
       const msgs = await client.getMessages(deezload, { limit: 5 });
-      log(`bridge: album ${albumId} view timeout — recent deezload messages:`);
+      const lines: string[] = [`recent deezload messages for album ${albumId}:`];
       for (const m of msgs) {
         const buttons = this.collectCallbackButtons(m as Api.Message);
-        log(
-          `  - id=${(m as any).id} date=${(m as any).date} buttons=${buttons.length}` +
-          (buttons.length
-            ? ` data=[${buttons.slice(0, 6).map((b) => `"${b.text}"→${bytesToAscii(b.data)}`).join(", ")}]`
-            : ""),
+        lines.push(
+          `- id=${(m as any).id} date=${(m as any).date} buttons=${buttons.length}` +
+          (buttons.length ? ` [${describeButtons(buttons)}]` : ""),
         );
       }
+      const text = lines.join(" | ");
+      log(`bridge: album ${albumId} view timeout — ${text}`);
+      return text;
     } catch (error) {
       warn("bridge: album view dump failed", error);
+      return "recent-message dump failed";
     }
   }
 }

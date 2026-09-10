@@ -23,6 +23,9 @@ export type AlbumBatchRow = {
   // The "⏳ Fetching…" status message, edited to the final receipt.
   status_msg_id: number | null;
   album_msg_id: number | null;
+  // Why the run failed (bridge failure reason) — the zero-delivered receipt
+  // shows this instead of a bare "0 of N".
+  failure_reason: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -33,8 +36,8 @@ async function ensureTable(db: D1Database) {
   if (tableReady) return;
   try {
     await db.prepare("SELECT 1 FROM album_batches LIMIT 1").all();
-    // Table predates selected/status_msg_id — add them idempotently.
-    for (const col of ["selected", "status_msg_id"]) {
+    // Table predates selected/status_msg_id/failure_reason — add them idempotently.
+    for (const col of ["selected", "status_msg_id", "failure_reason"]) {
       try {
         await db.prepare(`SELECT ${col} FROM album_batches LIMIT 1`).all();
       } catch {
@@ -94,7 +97,7 @@ export async function getAlbumBatch(db: D1Database, batchToken: string): Promise
   await ensureTable(db);
   const row = await db.prepare(`
     SELECT batch_token, user_id, chat_id, album_id, title, artist, cover_url, release_date,
-           track_count, status, selected, status_msg_id, album_msg_id, created_at, updated_at
+           track_count, status, selected, status_msg_id, album_msg_id, failure_reason, created_at, updated_at
     FROM album_batches WHERE batch_token = ?
   `)
     .bind(batchToken)
@@ -172,5 +175,14 @@ export async function setBatchSelected(db: D1Database, batchToken: string, track
     UPDATE album_batches SET selected = ?, updated_at = unixepoch() WHERE batch_token = ?
   `)
     .bind(JSON.stringify(trackIds), batchToken)
+    .run();
+}
+
+export async function setBatchFailureReason(db: D1Database, batchToken: string, reason: string): Promise<void> {
+  await ensureTable(db);
+  await db.prepare(`
+    UPDATE album_batches SET failure_reason = ?, updated_at = unixepoch() WHERE batch_token = ?
+  `)
+    .bind(reason, batchToken)
     .run();
 }

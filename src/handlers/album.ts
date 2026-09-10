@@ -43,6 +43,7 @@ import {
   hasPendingBatchForUser,
   markBatchComplete,
   setBatchAlbumMsg,
+  setBatchFailureReason,
   setBatchSelected,
   setBatchStatusMsg,
 } from "../db/albumBatches";
@@ -438,6 +439,7 @@ export async function handleAlbumGetAll(ctx: Context, env: Env): Promise<void> {
   let enqueueError: string | undefined;
   if (route === "tracks") {
     // Gentle route: one deezerttrack job per selected track (≤ threshold).
+    let enqueueFailures = 0;
     for (const row of selectedRowTokens) {
       try {
         await enqueueBridgeJob(env, row.token, row.trackId, chatId);
@@ -449,6 +451,26 @@ export async function handleAlbumGetAll(ctx: Context, env: Env): Promise<void> {
           // ignore
         }
         enqueueError = "some tracks couldn't be queued";
+        enqueueFailures++;
+      }
+    }
+    // If EVERY enqueue failed, no delivery will ever nudge assembly —
+    // record why and call the guarded hook. It no-ops while any selected
+    // row is still pending (partial failures keep flowing normally); when
+    // it does assemble, the status message already carries the final
+    // receipt and the "Started, but" edit below must not overwrite it.
+    if (enqueueFailures > 0 && enqueueFailures === selectedRowTokens.length) {
+      try {
+        await setBatchFailureReason(env.DB, batchToken, "the track jobs couldn't be queued");
+      } catch {
+        // ignore
+      }
+    }
+    if (enqueueFailures > 0) {
+      const finalized = await onAlbumProgress(env, batchToken);
+      if (finalized) {
+        log("album: track enqueues all failed, batch finalized", JSON.stringify({ batchToken }));
+        return;
       }
     }
   } else {
@@ -460,13 +482,27 @@ export async function handleAlbumGetAll(ctx: Context, env: Env): Promise<void> {
     } catch (error) {
       warn("album: album-route enqueue failed", albumId, error);
       // Fail every selected pending row — the assembly renders them as
-      // deezload notes.
+      // deezload notes. Then nudge assembly so the batch finalizes NOW
+      // instead of sitting pending until the guard self-heals.
       for (const row of selectedRowTokens) {
         try {
           await setRequestStatus(env.DB, row.token, "failed");
         } catch {
           // ignore
         }
+      }
+      try {
+        await setBatchFailureReason(env.DB, batchToken, "the album job couldn't be queued");
+      } catch {
+        // ignore
+      }
+      const finalized = await onAlbumProgress(env, batchToken);
+      if (finalized) {
+        // The batch assembled and the status message already carries the
+        // final failure receipt — don't overwrite it with the "Started, but"
+        // edit below.
+        log("album: album-route enqueue failed, batch finalized", JSON.stringify({ batchToken }));
+        return;
       }
       enqueueError = "the album job couldn't be queued";
     }
@@ -732,8 +768,18 @@ export async function failAlbumBatch(env: Env, batchToken: string, reason?: stri
         await setRequestStatus(env.DB, row.req_token, "failed");
       }
     }
-    // Put the reason on the status message so the admin sees WHY, not just
-    // "0 of N".
+    // Persist the reason: the zero-delivered assembly receipt shows WHY, not
+    // just "0 of N" (onAlbumProgress would otherwise overwrite the edit
+    // below with "Done — 0 of N").
+    if (reason) {
+      try {
+        await setBatchFailureReason(env.DB, batchToken, reason);
+      } catch {
+        // best-effort
+      }
+    }
+    // Put the reason on the status message too so the admin sees it
+    // immediately (onAlbumProgress's final receipt repeats it).
     if (reason && batch.status_msg_id) {
       try {
         const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
@@ -754,30 +800,32 @@ export async function failAlbumBatch(env: Env, batchToken: string, reason?: stri
 
 // Progress hook: called by the bridge after every album state change.
 // Assembles when every selected row is terminal. Best-effort, never throws.
-export async function onAlbumProgress(env: Env, albumToken: string): Promise<void> {
+// Returns true when this caller flipped the batch and assembled (or at least
+// consumed the flip) — callers use it to know the status receipt is final.
+export async function onAlbumProgress(env: Env, albumToken: string): Promise<boolean> {
   try {
     const batch = await getAlbumBatch(env.DB, albumToken);
     if (!batch || batch.status !== "pending") {
-      return;
+      return false;
     }
     const rows = await getRequestsByAlbumToken(env.DB, albumToken);
     if (!rows.length) {
-      return;
+      return false;
     }
 
     const selectedIds = parseSelected(batch.selected, rows);
     const relevant = rows.filter((r) => selectedIds.has(r.track_id));
     if (!relevant.length) {
-      return;
+      return false;
     }
     if (!relevant.every((r) => r.status !== "pending")) {
       log("album: batch not yet complete", albumToken);
-      return;
+      return false;
     }
 
     // The guarded flip picks exactly one assembler.
     if (!(await markBatchComplete(env.DB, albumToken))) {
-      return;
+      return false;
     }
 
     let position: RichPosition = "center";
@@ -819,32 +867,57 @@ export async function onAlbumProgress(env: Env, albumToken: string): Promise<voi
     });
 
     const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
-    const msg = await (api as any).sendRichMessage(batch.chat_id, {
-      html,
-      media,
-      skip_entity_detection: true,
-    });
-    if (msg?.message_id) {
-      await setBatchAlbumMsg(env.DB, albumToken, msg.message_id);
+    // Rich send with a hard fallback: a rejection here (e.g. one malformed
+    // media entry) used to kill assembly AFTER the guarded flip — the batch
+    // was complete in D1 but the status message stayed "⏳ Fetching"
+    // forever, and Cancel correctly refused ("already finished"). The
+    // fallback is a plain sendAudio per delivered track, which cannot be
+    // poisoned by rich-html quirks.
+    let sentMsgId: number | undefined;
+    try {
+      const msg = await (api as any).sendRichMessage(batch.chat_id, {
+        html,
+        media,
+        skip_entity_detection: true,
+      });
+      sentMsgId = msg?.message_id;
+    } catch (error) {
+      warn("album: rich album send failed, falling back to plain audio sends", error);
+    }
+    if (sentMsgId) {
+      await setBatchAlbumMsg(env.DB, albumToken, sentMsgId);
+    } else {
+      for (const track of tracks) {
+        if (!track.fileId) continue;
+        try {
+          await api.sendAudio(batch.chat_id, track.fileId, {
+            caption: `<b>${escapeHtml(track.trackName)}</b>`,
+            parse_mode: "HTML",
+          });
+        } catch (error) {
+          warn("album: plain fallback audio send failed", track.trackId, error);
+        }
+      }
     }
 
     const okCount = tracks.filter((t) => t.fileId).length;
     if (batch.status_msg_id) {
       try {
-        await api.editMessageText(
-          batch.chat_id,
-          batch.status_msg_id,
-          okCount === tracks.length
+        const finalText = okCount === 0 && batch.failure_reason
+          ? `❌ Album fetch failed: ${batch.failure_reason.slice(0, 300)}`
+          : okCount === tracks.length
             ? `✅ Done — ${okCount} track(s) in the album message above.`
-            : `⚠️ Done — ${okCount} of ${tracks.length} fetched; the rest are deezload links in the message above.`,
-        );
+            : `⚠️ Done — ${okCount} of ${tracks.length} fetched; the rest are deezload links in the message above.`;
+        await api.editMessageText(batch.chat_id, batch.status_msg_id, finalText);
       } catch {
         // edit races fine
       }
     }
     log("album: assembled", JSON.stringify({ albumToken, delivered: okCount, total: tracks.length }));
+    return true;
   } catch (error) {
     warn("album: progress handling failed", albumToken, error);
+    return false;
   }
 }
 

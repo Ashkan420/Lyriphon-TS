@@ -443,10 +443,14 @@ export function buildAlbumRichMessage(options: {
       media.push({ id: mediaId, media: { type: "audio", media: track.fileId } });
       sections.push(
         `<figure><audio src="tg://audio?id=${mediaId}"></audio>` +
-        `<figcaption>${name}</figcaption></figure>\n` +
-        `<tg-button-row align="${position}">` +
-        `<tg-button type="url"${styleAttr} url="${esc(track.telegraphUrl)}">Lyrics</tg-button>` +
-        `</tg-button-row>`,
+        `<figcaption>${name}</figcaption></figure>` +
+        // Page build failed — a url="" tg-button is rejected by the rich API
+        // and would poison the WHOLE album message; render the player alone.
+        (track.telegraphUrl
+          ? `\n<tg-button-row align="${position}">` +
+            `<tg-button type="url"${styleAttr} url="${esc(track.telegraphUrl)}">Lyrics</tg-button>` +
+            `</tg-button-row>`
+          : ""),
       );
     } else {
       sections.push(

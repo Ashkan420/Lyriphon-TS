@@ -305,6 +305,16 @@ export class BridgeDO {
       // Fail the D1 row and notify the requester directly — no MTProto
       // round-trip (the bridge may be exactly what's broken).
       await this.failRequestDirectly(job.token, reason);
+      // The owner needs the failure visible outside any log viewer: the
+      // album batch's own receipt truncates, and BridgeDO console output
+      // doesn't reach live tail. Full reason (with diagnostics), capped for
+      // the Telegram message limit.
+      await this.notifyOwnerText(
+        `⚠️ Bridge job failed\n\n` +
+        `token: ${job.token}\n` +
+        (job.albumId !== undefined ? `album: ${job.albumId}\n` : "") +
+        `reason: ${String(error?.message ?? error).slice(0, 3500)}`,
+      );
     } finally {
       this.processing = false;
       await this.state.storage.delete(DO_STORAGE_JOB);
@@ -395,6 +405,12 @@ export class BridgeDO {
     this.processing = false;
     await this.state.storage.delete(DO_STORAGE_JOB);
     await this.failRequestDirectly(job.token, "job timeout");
+    await this.notifyOwnerText(
+      `⏱️ Bridge watchdog killed a stuck job\n\n` +
+      `token: ${job.token}\n` +
+      (job.albumId !== undefined ? `album: ${job.albumId}\n` : "") +
+      `track: ${job.trackId}`,
+    );
     // Keep the queue moving after a watchdog kill.
     this.state.waitUntil(this.pump());
   }
