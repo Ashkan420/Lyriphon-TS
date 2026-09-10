@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getTrackRecord,
+  getTrackFileIds,
   upsertTrack,
   setTrackFileId,
   setTrackLyrics,
@@ -75,6 +76,14 @@ function fakeTracksDb() {
               if (sql.includes("ORDER BY updated_at DESC")) {
                 const matches = filterRows(pattern, sql);
                 return { results: matches.slice(offset, offset + limit) } as any;
+              }
+              if (sql.includes("WHERE file_id IS NOT NULL AND track_id IN")) {
+                const ids = args as number[];
+                const matches = ids
+                  .map((id) => rows.get(id))
+                  .filter((r) => r && r.file_id !== null && r.file_id !== undefined)
+                  .map((r) => ({ track_id: r.track_id, file_id: r.file_id }));
+                return { results: matches } as any;
               }
               return { results: [] };
             },
@@ -309,5 +318,23 @@ describe("tracks store", () => {
     await upsertTrack(db, { trackId: 1, fileId: "f", lyrics: "l" });
     await upsertTrack(db, { trackId: 2, fileId: "f" });
     expect(await countTrackStats(db)).toEqual({ total: 2, withFileId: 2, withLyrics: 1 });
+  });
+
+  it("getTrackFileIds batch-returns only rows holding a file", async () => {
+    const db = fakeTracksDb();
+    await upsertTrack(db, { trackId: 1, fileId: "file-1" });
+    await upsertTrack(db, { trackId: 2, title: "no file yet" });
+    await upsertTrack(db, { trackId: 3, fileId: "file-3" });
+    const map = await getTrackFileIds(db, [1, 2, 3, 4]);
+    expect(map.size).toBe(2);
+    expect(map.get(1)).toBe("file-1");
+    expect(map.get(3)).toBe("file-3");
+    expect(map.has(2)).toBe(false);
+    expect(map.has(4)).toBe(false);
+  });
+
+  it("getTrackFileIds tolerates an empty id list", async () => {
+    const db = fakeTracksDb();
+    expect((await getTrackFileIds(db, [])).size).toBe(0);
   });
 });

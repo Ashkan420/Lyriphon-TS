@@ -441,11 +441,12 @@ export function buildAlbumRichMessage(options: {
     if (track.fileId) {
       const mediaId = `trk${i + 1}`;
       media.push({ id: mediaId, media: { type: "audio", media: track.fileId } });
+      // No caption under the player — the audio bubble renders the file's
+      // own title/performer natively. A page-build failure omits the Lyrics
+      // button instead of emitting url="" (a rich-API rejection that would
+      // poison the WHOLE album message).
       sections.push(
-        `<figure><audio src="tg://audio?id=${mediaId}"></audio>` +
-        `<figcaption>${name}</figcaption></figure>` +
-        // Page build failed — a url="" tg-button is rejected by the rich API
-        // and would poison the WHOLE album message; render the player alone.
+        `<figure><audio src="tg://audio?id=${mediaId}"></audio></figure>` +
         (track.telegraphUrl
           ? `\n<tg-button-row align="${position}">` +
             `<tg-button type="url"${styleAttr} url="${esc(track.telegraphUrl)}">Lyrics</tg-button>` +

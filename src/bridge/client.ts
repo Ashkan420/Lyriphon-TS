@@ -32,9 +32,12 @@ import { log, warn } from "../utils/logger";
 export const DEEZLOAD_USERNAME = "deezload2bot";
 
 const DEEZLOAD_AUDIO_TIMEOUT_MS = 180000;
-// Album stream: silence of this length after the last audio means deezload
-// is done sending (it streams files one by one with gaps).
-const DEEZLOAD_ALBUM_QUIET_MS = 45000;
+// Album stream backstop: silence of this length after the last audio ends
+// the stream even when the expected count never arrived (failed tracks,
+// partial sends). NOT the normal finish path — the collector completes the
+// moment the expected count arrives (deezload sends in fast groups, so
+// waiting out a fixed quiet period adds ~30s of dead latency).
+const DEEZLOAD_ALBUM_QUIET_MS = 30000;
 // A hung TCP/handshake must fail loudly instead of wedging the DO forever.
 const CONNECT_TIMEOUT_MS = 45000;
 const SIGNIN_TOTAL_TIMEOUT_MS = 180000;
@@ -442,7 +445,7 @@ export class BridgeJobs {
    * guarantees no other job interleaves with the stream. Returns the number
    * of audios forwarded.
    */
-  async fetchAlbum(albumId: number, bridgePeer: string, token: string): Promise<number> {
+  async fetchAlbum(albumId: number, bridgePeer: string, token: string, expectedCount?: number): Promise<number> {
     const client = await this.bridge.get();
     const deezload = await client.getEntity(DEEZLOAD_USERNAME);
 
@@ -458,7 +461,7 @@ export class BridgeJobs {
     // view waiter resolves null on timeout, the audio collector resolves
     // an empty array — so no dangling-rejection bookkeeping either.
     const viewPromise = this.waitForAlbumView(client, deezload, albumId, startedAt);
-    const audioPromise = this.collectAlbumAudio(client, albumId);
+    const audioPromise = this.collectAlbumAudio(client, albumId, expectedCount);
 
     await client.sendMessage(deezload, {
       message: `/start deezertalbum${albumId}`,
@@ -728,10 +731,21 @@ export class BridgeJobs {
     return out;
   }
 
-  // Collect streamed audios; every arrival resets a quiet-period timer, and
-  // when it fires the stream is done. Never rejects: zero audios within the
-  // track timeout resolves an empty array (the caller decides that's fatal).
-  private async collectAlbumAudio(client: TelegramClient, albumId: number): Promise<Api.Message[]> {
+  // Collect streamed audios. Expected-count finish: when the collector knows
+  // how many audios deezload will send, the nth arrival ends the stream
+  // IMMEDIATELY (deezload sends in fast groups — waiting out a quiet period
+  // adds dead latency). The quiet-period timer stays as the backstop for
+  // under-delivery (failed tracks, partial sends). Never rejects: zero
+  // audios within the track timeout resolves an empty array (the caller
+  // decides that's fatal).
+  private async collectAlbumAudio(
+    client: TelegramClient,
+    albumId: number,
+    expectedCount?: number,
+  ): Promise<Api.Message[]> {
+    const countTarget = typeof expectedCount === "number" && Number.isFinite(expectedCount) && expectedCount > 0
+      ? Math.floor(expectedCount)
+      : undefined;
     return new Promise<Api.Message[]>((resolve) => {
       const audios: Api.Message[] = [];
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -752,7 +766,12 @@ export class BridgeJobs {
         const isAudio = Boolean(msg.audio) || mime.startsWith("audio/");
         if (!isAudio) return; // cover photo / status text: skipped
         audios.push(msg as Api.Message);
-        // Each arrival resets the quiet-period timer.
+        // The expected count arrived — nothing more is coming; finish now.
+        if (countTarget !== undefined && audios.length >= countTarget) {
+          finish();
+          return;
+        }
+        // Each arrival resets the quiet-period timer (backstop only).
         clearTimeout(timer);
         timer = setTimeout(finish, DEEZLOAD_ALBUM_QUIET_MS);
       };

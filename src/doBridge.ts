@@ -38,6 +38,10 @@ type CurrentJob = {
   // Set = album-stream job: one deezertalbum command, N audios tagged
   // lyq:albumfile back into the bridge DM.
   albumId?: number;
+  // Album jobs only: how many audios deezload will stream (the album's
+  // track count). The collector finishes the moment this count arrives
+  // instead of waiting out the quiet-period backstop.
+  expectedCount?: number;
   startedAt: number;
 };
 
@@ -235,6 +239,7 @@ export class BridgeDO {
       trackId: number;
       chatId: number;
       albumId?: number;
+      expectedCount?: number;
     };
     // Type checks, not falsy checks: inline rows pass chatId 0 (chatless —
     // delivery edits the inline message instead of DM-sending). albumId set
@@ -256,6 +261,9 @@ export class BridgeDO {
       trackId: body.trackId,
       chatId: body.chatId,
       albumId: typeof body.albumId === "number" && Number.isFinite(body.albumId) ? body.albumId : undefined,
+      expectedCount: typeof body.expectedCount === "number" && Number.isFinite(body.expectedCount) && body.expectedCount > 0
+        ? Math.floor(body.expectedCount)
+        : undefined,
       startedAt: Date.now(),
     };
     queue.push(job);
@@ -293,7 +301,7 @@ export class BridgeDO {
         // file by the lyq:albumfile stream (an empty stream rejects here,
         // failing the single album row via failRequestDirectly → the album
         // failure path in bridge.ts).
-        const count = await this.jobs.fetchAlbum(job.albumId, peer, job.token);
+        const count = await this.jobs.fetchAlbum(job.albumId, peer, job.token, job.expectedCount);
         log("BridgeDO: album forwarded", JSON.stringify({ token: job.token, albumId: job.albumId, count }));
       } else {
         await this.jobs.fetchTrack(job.trackId, peer, job.token);

@@ -3,16 +3,20 @@
 //
 // /album <deezload link | album id | query> → cover photo with one toggle
 // row per song (tap to select, ✅ + primary style), GET ALL/GET SELECTED,
-// and Back. The bottom action enqueues the fetch through the bridge:
-// ≤ ALBUM_TRACK_THRESHOLD selected tracks → one deezerttrack job per track
-// (gentle on deezload); more → ONE deezertalbum job (deezload streams the
-// whole album; unselected files are cached but excluded from the message).
+// and Back. Cache-first: selected tracks already holding a file_id in the
+// tracks store are marked delivered on the spot. The bottom action enqueues
+// only the MISSING tracks through the bridge, routed by the missing count:
+// ≤ ALBUM_TRACK_THRESHOLD → one deezerttrack job per track (gentle on
+// deezload); more → ONE deezertalbum job (deezload streams the whole album;
+// unselected files are cached but excluded from the message); zero missing
+// → no bridge job, assembly runs immediately from cache.
 //
 // Lyrics + Telegraph pages build lazily — one track per bridge-delivery
-// webhook (the v1 upfront loop froze the bot). When every selected track is
-// terminal, the guarded batch flip assembles ONE rich message: cover +
-// credit, then player + Lyrics button per track; failures render as
-// deezload note lines.
+// webhook (the v1 upfront loop froze the bot); cached-only rows get their
+// pages backfilled in small parallel chunks at assembly. When every
+// selected track is terminal, the guarded batch flip assembles ONE rich
+// message: cover + credit, then player + Lyrics button per track; failures
+// render as deezload note lines.
 //
 // Never throws from the bridge-called paths (same 500-redelivery rule as
 // handleBridgeUpdate).
@@ -28,7 +32,7 @@ import { searchAlbums, getAlbum } from "../services/deezer";
 import { getLyrics } from "../services/lrclib";
 import { createSongTelegraph } from "../services/telegraph";
 import { normalizeLyrics } from "../utils/lyrics";
-import { getTrackRecord, setTrackFileId, upsertTrack } from "../db/tracks";
+import { getTrackRecord, getTrackFileIds, setTrackFileId, upsertTrack } from "../db/tracks";
 import {
   AudioRequestRow,
   createAudioRequest,
@@ -366,7 +370,6 @@ export async function handleAlbumGetAll(ctx: Context, env: Env): Promise<void> {
     ? new Set(pick.trackIds)
     : new Set(tracks.map((t) => Number(t.id)));
   const selectedTracks = tracks.filter((t) => selectedIds.has(Number(t.id)));
-  const route = routeForSelection(selectedTracks.length);
   await safeAnswer(ctx);
 
   const batchToken = crypto.randomUUID();
@@ -390,12 +393,17 @@ export async function handleAlbumGetAll(ctx: Context, env: Env): Promise<void> {
   }
 
   // One status message with Cancel — no counters, no queue-position chrome
-  // (that's deezload's own flow, not ours).
+  // (that's deezload's own flow, not ours). Cache-first: tracks already in
+  // the store need no fetch, so the message says what will actually happen.
   const total = tracks.length;
   const selectedCount = selectedTracks.length;
+  const cachedFiles = await getTrackFileIds(env.DB, [...selectedIds]);
+  const missingCount = selectedCount - cachedFiles.size;
   const status = await ctx.api.sendMessage(
     chatId,
-    `⏳ Fetching ${selectedCount} of ${total} track(s) — the album message arrives when everything's ready.`,
+    missingCount === 0
+      ? `📦 ${selectedCount} of ${total} track(s) are already cached — assembling…`
+      : `⏳ Fetching ${missingCount} of ${total} track(s) — the album message arrives when everything's ready.`,
     { reply_markup: { inline_keyboard: [[{ text: "❌ Cancel", callback_data: `albumcancel_${batchToken}` }]] } },
   );
   try {
@@ -436,11 +444,44 @@ export async function handleAlbumGetAll(ctx: Context, env: Env): Promise<void> {
 
   const selectedRowTokens = rowTokens.filter((r) => selectedIds.has(r.trackId));
 
+  // Cache-first: rows whose track already holds a file_id flip to delivered
+  // immediately — no job, no forward, no re-download. Only the missing ones
+  // enqueue, and the route threshold applies to the MISSING count.
+  const cachedRowTokens: typeof selectedRowTokens = [];
+  const missingRowTokens: typeof selectedRowTokens = [];
+  for (const row of selectedRowTokens) {
+    if (cachedFiles.has(row.trackId)) {
+      try {
+        await setRequestStatus(env.DB, row.token, "delivered");
+        cachedRowTokens.push(row);
+      } catch (error) {
+        warn("album: cached-row flip failed", row.trackId, error);
+        missingRowTokens.push(row); // fetch it the normal way instead
+      }
+    } else {
+      missingRowTokens.push(row);
+    }
+  }
+  if (cachedRowTokens.length) {
+    log("album: cache hits", JSON.stringify({
+      batchToken,
+      cached: cachedRowTokens.length,
+      missing: missingRowTokens.length,
+    }));
+  }
+
   let enqueueError: string | undefined;
+  const route = routeForSelection(missingRowTokens.length);
+  if (missingRowTokens.length === 0) {
+    // Everything selected is already cached — no bridge job at all.
+    log("album: all cached, assembling immediately", JSON.stringify({ batchToken, count: selectedCount }));
+    await onAlbumProgress(env, batchToken);
+    return;
+  }
   if (route === "tracks") {
-    // Gentle route: one deezerttrack job per selected track (≤ threshold).
+    // Gentle route: one deezerttrack job per MISSING track (≤ threshold).
     let enqueueFailures = 0;
-    for (const row of selectedRowTokens) {
+    for (const row of missingRowTokens) {
       try {
         await enqueueBridgeJob(env, row.token, row.trackId, chatId);
       } catch (error) {
@@ -459,7 +500,7 @@ export async function handleAlbumGetAll(ctx: Context, env: Env): Promise<void> {
     // row is still pending (partial failures keep flowing normally); when
     // it does assemble, the status message already carries the final
     // receipt and the "Started, but" edit below must not overwrite it.
-    if (enqueueFailures > 0 && enqueueFailures === selectedRowTokens.length) {
+    if (enqueueFailures > 0 && enqueueFailures === missingRowTokens.length) {
       try {
         await setBatchFailureReason(env.DB, batchToken, "the track jobs couldn't be queued");
       } catch {
@@ -476,15 +517,20 @@ export async function handleAlbumGetAll(ctx: Context, env: Env): Promise<void> {
   } else {
     // Album route: ONE deezertalbum job; deezload streams the whole album
     // and files are paired by arrival order. Unselected tracks are cached
-    // but excluded from the rich message.
+    // but excluded from the rich message. The expected stream count lets
+    // the collector finish the moment the last ROW-covered audio arrives
+    // instead of waiting out the quiet-period backstop (rows cover the
+    // first ALBUM_MAX_TRACKS tracks; deezload's excess sends are simply
+    // never forwarded).
     try {
-      await enqueueBridgeAlbumJob(env, batchToken, albumId, chatId);
+      await enqueueBridgeAlbumJob(env, batchToken, albumId, chatId, tracks.length);
     } catch (error) {
       warn("album: album-route enqueue failed", albumId, error);
-      // Fail every selected pending row — the assembly renders them as
-      // deezload notes. Then nudge assembly so the batch finalizes NOW
-      // instead of sitting pending until the guard self-heals.
-      for (const row of selectedRowTokens) {
+      // Fail every MISSING pending row — the assembly renders them as
+      // deezload notes (cached rows stay delivered). Then nudge assembly so
+      // the batch finalizes NOW instead of sitting pending until the guard
+      // self-heals.
+      for (const row of missingRowTokens) {
         try {
           await setRequestStatus(env.DB, row.token, "failed");
         } catch {
@@ -521,7 +567,15 @@ export async function handleAlbumGetAll(ctx: Context, env: Env): Promise<void> {
     }
   }
 
-  log("album: GET ALL enqueued", JSON.stringify({ batchToken, albumId, route, selected: selectedTracks.length, total }));
+  log("album: GET ALL enqueued", JSON.stringify({
+    batchToken,
+    albumId,
+    route,
+    selected: selectedTracks.length,
+    cached: cachedRowTokens.length,
+    missing: missingRowTokens.length,
+    total,
+  }));
 }
 
 // Hand a job to BridgeDO. Same contract as sendBridgeJob in
@@ -541,11 +595,19 @@ async function enqueueBridgeJob(env: Env, token: string, trackId: number, chatId
 
 // Album-route enqueue: one BridgeDO job carrying the album id. The job
 // token = batch token, so lyq:albumfile tags resolve rows directly.
-async function enqueueBridgeAlbumJob(env: Env, token: string, albumId: number, chatId: number): Promise<number> {
+// expectedStreamCount = the album's track count — BridgeDO's collector
+// finishes the stream as soon as that many audios arrived.
+async function enqueueBridgeAlbumJob(
+  env: Env,
+  token: string,
+  albumId: number,
+  chatId: number,
+  expectedStreamCount?: number,
+): Promise<number> {
   const stub = env.BRIDGE_DO.get(env.BRIDGE_DO.idFromName("bridge"));
   const res = await stub.fetch("https://bridge/enqueue", {
     method: "POST",
-    body: JSON.stringify({ token, trackId: 0, chatId, albumId }),
+    body: JSON.stringify({ token, trackId: 0, chatId, albumId, expectedCount: expectedStreamCount }),
   });
   const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; position?: number };
   if (!body.ok) {
@@ -617,7 +679,7 @@ async function buildTrackPageLazily(
       }
     }
 
-    const page = await createSongTelegraph(env, {
+    const buildPage = () => createSongTelegraph(env, {
       authorName: "Lyriphon",
       track: trackName,
       trackId: row.track_id,
@@ -629,7 +691,20 @@ async function buildTrackPageLazily(
       releaseDate: album.releaseDate,
       lyrics,
     });
-    return page.url;
+    try {
+      return (await buildPage()).url;
+    } catch (error) {
+      // Telegraph bursts fail occasionally (13 rapid builds in one album);
+      // one retry after a short pause.
+      warn("album: lazy page build failed, retrying once", row.track_id, error);
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        return (await buildPage()).url;
+      } catch (retryError) {
+        warn("album: lazy page build retry failed", row.track_id, retryError);
+        return undefined;
+      }
+    }
   } catch (error) {
     warn("album: lazy page build failed", row.track_id, error);
     return undefined;
@@ -828,6 +903,33 @@ export async function onAlbumProgress(env: Env, albumToken: string): Promise<boo
       return false;
     }
 
+    // Backfill pages for cached-delivered rows: page builds normally happen
+    // in the delivery webhook, but cache-first rows are flipped without one.
+    // Parallel chunks of 4 keep the burst gentle on Telegraph (~5 waves for
+    // a 20-track album).
+    const albumForPages = {
+      title: batch.title,
+      coverUrl: batch.cover_url ?? "",
+      releaseDate: batch.release_date ?? "Unknown",
+    };
+    const needPages = relevant.filter((r) => r.status === "delivered" && !r.telegraph_url);
+    for (let i = 0; i < needPages.length; i += 4) {
+      const chunk = needPages.slice(i, i + 4);
+      await Promise.all(chunk.map(async (row) => {
+        const page = await buildTrackPageLazily(env, row, albumForPages);
+        if (page) {
+          try {
+            await setRequestTelegraphUrl(env.DB, row.req_token, page);
+          } catch (error) {
+            warn("album: page backfill persist failed", row.track_id, error);
+          }
+        }
+      }));
+    }
+    // Fresh read: backfilled urls must be visible to the tracks[] assembly.
+    const freshRows = needPages.length ? await getRequestsByAlbumToken(env.DB, albumToken) : rows;
+    const relevantFresh = freshRows.filter((r) => selectedIds.has(r.track_id));
+
     let position: RichPosition = "center";
     let color: RichColor = "primary";
     try {
@@ -840,7 +942,7 @@ export async function onAlbumProgress(env: Env, albumToken: string): Promise<boo
     }
 
     const tracks: Array<{ trackName: string; trackId: number; telegraphUrl: string; fileId?: string }> = [];
-    for (const row of relevant) {
+    for (const row of relevantFresh) {
       let fileId: string | undefined;
       if (row.status === "delivered") {
         try {

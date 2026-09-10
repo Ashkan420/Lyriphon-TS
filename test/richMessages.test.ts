@@ -237,11 +237,33 @@ describe("buildAlbumRichMessage", () => {
       albumTitle: 'A & B <C>',
       artistName: "D>E",
       coverUrl: "https://c/1.jpg",
-      tracks: [{ trackName: 'X "Y" & Z', trackId: 1, telegraphUrl: "https://telegra.ph/x?a=1&b=2", fileId: "F" }],
+      tracks: [
+        { trackName: 'X "Y" & Z', trackId: 1, telegraphUrl: "https://telegra.ph/x?a=1&b=2", fileId: "F" },
+        // Failed track: name appears in the deezload-note line.
+        { trackName: 'V <W> &', trackId: 2, telegraphUrl: "", },
+      ],
     });
     expect(html).toContain("<figcaption>D&gt;E — A &amp; B &lt;C&gt;</figcaption>");
-    expect(html).toContain("<figcaption>X &quot;Y&quot; &amp; Z</figcaption>");
     expect(html).toContain('url="https://telegra.ph/x?a=1&amp;b=2"');
+    expect(html).toContain("<p>🎵 V &lt;W&gt; &amp; — <a href=");
+  });
+
+  it("omits the per-player caption and the Lyrics button when no page exists", () => {
+    const { html } = buildAlbumRichMessage({
+      ...base,
+      tracks: [
+        { trackName: "With Page", trackId: 1, telegraphUrl: "https://telegra.ph/p", fileId: "F1" },
+        { trackName: "No Page", trackId: 2, telegraphUrl: "", fileId: "F2" },
+      ],
+    });
+    // Player sections carry no figcaption — the audio bubble shows the
+    // file's own title/performer.
+    expect(html).not.toContain("<figcaption>X");
+    const playerSections = html.split("<figure><audio").length - 1;
+    expect(playerSections).toBe(2);
+    expect(html).toContain("<tg-button type=\"url\" style=\"primary\" url=\"https://telegra.ph/p\">Lyrics</tg-button>");
+    // The pageless player must not render an empty-url button row.
+    expect(html).not.toContain('url=""');
   });
 });
 
