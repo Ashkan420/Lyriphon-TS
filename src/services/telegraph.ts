@@ -3,6 +3,37 @@ import { CHANNEL_LINK, DEEZLOAD_BOT } from "../config";
 import { formatLyricsForTelegraph } from "./lyricsFormatter";
 import { isValidImageUrl, safeLink } from "../utils/urlValidation";
 
+// Telegraph rejects bursts: 13 album pages built concurrently (one per
+// bridge-delivery webhook, all within ~5s) lost 3 of 13. This module-level
+// promise chain spaces createPage calls ≥ MIN_GAP apart per isolate, which
+// serializes the burst; single-track flows see an empty queue and run
+// immediately.
+const TELEGRAPH_MIN_GAP_MS = 300;
+let telegraphQueue: Promise<void> = Promise.resolve();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function pacedCreatePage(body: unknown): Promise<any> {
+  const run = telegraphQueue.then(async () => {
+    const response = await fetch("https://api.telegra.ph/createPage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw new Error(`Telegraph createPage failed ${response.status}`);
+    }
+    return response.json();
+  });
+  // Keep the chain alive regardless of the call's outcome, and hold the gap.
+  telegraphQueue = run
+    .catch(() => {})
+    .then(() => sleep(TELEGRAPH_MIN_GAP_MS));
+  return run;
+}
+
 export type TelegraphNode =
   | string
   | {
@@ -54,24 +85,15 @@ export async function createSongTelegraph(env: Env, options: {
     lyrics,
   });
 
-  const response = await fetch("https://api.telegra.ph/createPage", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      access_token: env.TELEGRAPH_ACCESS_TOKEN,
-      title: track,
-      author_name: authorName,
-      author_url: CHANNEL_LINK,
-      return_content: true,
-      content,
-    }),
-  });
+  const data = await pacedCreatePage({
+    access_token: env.TELEGRAPH_ACCESS_TOKEN,
+    title: track,
+    author_name: authorName,
+    author_url: CHANNEL_LINK,
+    return_content: true,
+    content,
+  }) as any;
 
-  if (!response.ok) {
-    throw new Error(`Telegraph createPage failed ${response.status}`);
-  }
-
-  const data = await response.json() as any;
   if (!data.ok || !data.result) {
     throw new Error(`Telegraph API error: ${data.error || "unknown"}`);
   }

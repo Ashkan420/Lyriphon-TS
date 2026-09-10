@@ -691,23 +691,50 @@ async function buildTrackPageLazily(
       releaseDate: album.releaseDate,
       lyrics,
     });
-    try {
-      return (await buildPage()).url;
-    } catch (error) {
-      // Telegraph bursts fail occasionally (13 rapid builds in one album);
-      // one retry after a short pause.
-      warn("album: lazy page build failed, retrying once", row.track_id, error);
-      await new Promise((r) => setTimeout(r, 1000));
+    // Telegraph rejects bursts; pacing (telegraph.ts) spaces the calls and
+    // 3 attempts with backoff absorb the stragglers.
+    for (const [attempt, delayMs] of [[0, 0], [1, 1000], [2, 3000]] as const) {
+      if (delayMs) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
       try {
         return (await buildPage()).url;
-      } catch (retryError) {
-        warn("album: lazy page build retry failed", row.track_id, retryError);
-        return undefined;
+      } catch (error) {
+        warn(`album: lazy page build attempt ${attempt + 1} failed`, row.track_id, error);
       }
     }
+    return undefined;
   } catch (error) {
     warn("album: lazy page build failed", row.track_id, error);
     return undefined;
+  }
+}
+
+// Live page-build progress on the batch's status message: counts selected
+// rows that already hold a Telegraph page. Called after every successful
+// page persist (delivery webhooks + assembly backfill); repeated edits with
+// identical text are rejected by Telegram and swallowed here. Best-effort.
+async function updatePageProgress(env: Env, batchToken: string): Promise<void> {
+  try {
+    const batch = await getAlbumBatch(env.DB, batchToken);
+    if (!batch || batch.status !== "pending" || !batch.status_msg_id) {
+      return;
+    }
+    const rows = await getRequestsByAlbumToken(env.DB, batchToken);
+    const selectedIds = parseSelected(batch.selected, rows);
+    const selected = rows.filter((r) => selectedIds.has(r.track_id));
+    if (!selected.length) {
+      return;
+    }
+    const done = selected.filter((r) => r.telegraph_url).length;
+    const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
+    await api.editMessageText(
+      batch.chat_id,
+      batch.status_msg_id,
+      `📝 Creating lyrics pages ${done}/${selected.length}…`,
+    );
+  } catch {
+    // progress display only — never break the pipeline over it
   }
 }
 
@@ -763,6 +790,7 @@ export async function deliverAlbumFile(
       });
       if (page) {
         await setRequestTelegraphUrl(env.DB, row.req_token, page);
+        await updatePageProgress(env, batchToken);
       }
     }
     await setRequestStatus(env.DB, row.req_token, "delivered");
@@ -796,6 +824,7 @@ export async function deliverSelectedTrackFile(env: Env, row: AudioRequestRow, f
       });
       if (page) {
         await setRequestTelegraphUrl(env.DB, row.req_token, page);
+        await updatePageProgress(env, row.album_token!);
       }
     }
     await setRequestStatus(env.DB, row.req_token, "delivered");
@@ -925,6 +954,8 @@ export async function onAlbumProgress(env: Env, albumToken: string): Promise<boo
           }
         }
       }));
+      // The chunk's successes are persisted by now — recount and show it.
+      await updatePageProgress(env, albumToken);
     }
     // Fresh read: backfilled urls must be visible to the tracks[] assembly.
     const freshRows = needPages.length ? await getRequestsByAlbumToken(env.DB, albumToken) : rows;
