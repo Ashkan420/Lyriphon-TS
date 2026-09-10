@@ -11,12 +11,14 @@
 // unselected files are cached but excluded from the message); zero missing
 // → no bridge job, assembly runs immediately from cache.
 //
-// Lyrics + Telegraph pages build lazily — one track per bridge-delivery
-// webhook (the v1 upfront loop froze the bot); cached-only rows get their
-// pages backfilled in small parallel chunks at assembly. When every
-// selected track is terminal, the guarded batch flip assembles ONE rich
-// message: cover + credit, then player + Lyrics button per track; failures
-// render as deezload note lines.
+// Lyrics build lazily — one track per bridge-delivery webhook (the v1
+// upfront loop froze the bot); cached-only rows get their lyrics backfilled
+// in small parallel chunks at assembly. Lyrics live in the tracks store and
+// render INLINE in the final rich message as expandable <details> sections —
+// albums make NO Telegraph pages. When every selected track is terminal,
+// the guarded batch flip assembles the album as ONE rich message (or several
+// when the char limit forces a split): cover + credit, then player + lyrics
+// per track; failures render as deezload note lines.
 //
 // Never throws from the bridge-called paths (same 500-redelivery rule as
 // handleBridgeUpdate).
@@ -30,9 +32,8 @@ import { safeAnswer, safeDelete } from "../utils/telegram";
 import { isBotOwner } from "./admin";
 import { searchAlbums, getAlbum } from "../services/deezer";
 import { getLyrics } from "../services/lrclib";
-import { createSongTelegraph } from "../services/telegraph";
 import { normalizeLyrics } from "../utils/lyrics";
-import { getTrackRecord, getTrackFileIds, setTrackFileId, upsertTrack } from "../db/tracks";
+import { getTrackRecord, getTrackFileIds, getTrackLyrics, setTrackFileId, upsertTrack } from "../db/tracks";
 import {
   AudioRequestRow,
   createAudioRequest,
@@ -52,7 +53,7 @@ import {
   setBatchStatusMsg,
 } from "../db/albumBatches";
 import { getSetting, setSetting, isAlbumSearchEnabled, getUserRichPosition, getUserRichColor } from "../db/settings";
-import { buildAlbumRichMessage, RichPosition, RichColor } from "../utils/richMessages";
+import { buildAlbumRichMessages, RichPosition, RichColor } from "../utils/richMessages";
 
 // Which deezload route a selection uses. Pure for tests.
 export function routeForSelection(
@@ -645,10 +646,10 @@ export async function handleAlbumCancel(ctx: Context, env: Env): Promise<void> {
 // Build lyrics + Telegraph for ONE delivered album track, inside its own
 // delivery webhook. Failure → warn and return undefined (the player still
 // renders, just without a Lyrics button).
-async function buildTrackPageLazily(
+async function buildTrackLyricsLazily(
   env: Env,
   row: AudioRequestRow,
-  album: { title: string; coverUrl: string; releaseDate: string },
+  album: { title: string },
 ): Promise<string | undefined> {
   try {
     const trackName = row.track_title ?? "Unknown Track";
@@ -665,47 +666,27 @@ async function buildTrackPageLazily(
           warn("album: lyrics heal write failed", error);
         }
       }
-    } else {
-      const fetched = (await getLyrics(trackName, artistName, album.title)) ?? "";
-      if (fetched) {
-        lyrics = fetched;
-        try {
-          await upsertTrack(env.DB, { trackId: row.track_id, title: trackName, artist: artistName, lyrics });
-        } catch (error) {
-          warn("album: lyrics cache write failed", error);
-        }
-      } else {
-        lyrics = "";
-      }
+      return lyrics;
     }
-
-    const buildPage = () => createSongTelegraph(env, {
-      authorName: "Lyriphon",
-      track: trackName,
-      trackId: row.track_id,
-      artist: artistName,
-      artistId: 0,
-      album: album.title,
-      albumId: 0,
-      albumCoverUrl: album.coverUrl,
-      releaseDate: album.releaseDate,
-      lyrics,
-    });
-    // Telegraph rejects bursts; pacing (telegraph.ts) spaces the calls and
-    // 3 attempts with backoff absorb the stragglers.
-    for (const [attempt, delayMs] of [[0, 0], [1, 1000], [2, 3000]] as const) {
-      if (delayMs) {
-        await new Promise((r) => setTimeout(r, delayMs));
-      }
+    const fetched = (await getLyrics(trackName, artistName, album.title)) ?? "";
+    if (fetched) {
       try {
-        return (await buildPage()).url;
+        await upsertTrack(env.DB, { trackId: row.track_id, title: trackName, artist: artistName, lyrics: fetched });
       } catch (error) {
-        warn(`album: lazy page build attempt ${attempt + 1} failed`, row.track_id, error);
+        warn("album: lyrics cache write failed", error);
       }
+      return fetched;
     }
-    return undefined;
+    // Explicit "" marker: "checked, none" — the progress counter reads the
+    // store, and a re-run must not re-fetch this track.
+    try {
+      await upsertTrack(env.DB, { trackId: row.track_id, title: trackName, artist: artistName, lyrics: "" });
+    } catch (error) {
+      warn("album: no-lyrics marker write failed", error);
+    }
+    return "";
   } catch (error) {
-    warn("album: lazy page build failed", row.track_id, error);
+    warn("album: lazy lyrics build failed", row.track_id, error);
     return undefined;
   }
 }
@@ -714,7 +695,12 @@ async function buildTrackPageLazily(
 // rows that already hold a Telegraph page. Called after every successful
 // page persist (delivery webhooks + assembly backfill); repeated edits with
 // identical text are rejected by Telegram and swallowed here. Best-effort.
-async function updatePageProgress(env: Env, batchToken: string): Promise<void> {
+// Live lyrics progress on the batch's status message: counts selected rows
+// whose tracks-store record holds lyrics ("" = checked, none — counts as
+// done). Called after every lazy lyrics build (delivery webhooks + assembly
+// backfill); repeated identical edits are rejected by Telegram and swallowed
+// here. Best-effort.
+async function updateLyricsProgress(env: Env, batchToken: string): Promise<void> {
   try {
     const batch = await getAlbumBatch(env.DB, batchToken);
     if (!batch || batch.status !== "pending" || !batch.status_msg_id) {
@@ -726,12 +712,13 @@ async function updatePageProgress(env: Env, batchToken: string): Promise<void> {
     if (!selected.length) {
       return;
     }
-    const done = selected.filter((r) => r.telegraph_url).length;
+    const stored = await getTrackLyrics(env.DB, selected.map((r) => r.track_id));
+    const done = selected.filter((r) => stored.has(r.track_id)).length;
     const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
     await api.editMessageText(
       batch.chat_id,
       batch.status_msg_id,
-      `📝 Creating lyrics pages ${done}/${selected.length}…`,
+      `📝 Fetching lyrics ${done}/${selected.length}…`,
     );
   } catch {
     // progress display only — never break the pipeline over it
@@ -782,15 +769,10 @@ export async function deliverAlbumFile(
 
     const selectedIds = parseSelected(batch.selected, rows);
     if (selectedIds.has(row.track_id)) {
-      // Lazy page build: one track per webhook, so nothing freezes.
-      const page = await buildTrackPageLazily(env, row, {
-        title: batch.title,
-        coverUrl: batch.cover_url,
-        releaseDate: batch.release_date,
-      });
-      if (page) {
-        await setRequestTelegraphUrl(env.DB, row.req_token, page);
-        await updatePageProgress(env, batchToken);
+      // Lazy lyrics build: one track per webhook, so nothing freezes.
+      const lyrics = await buildTrackLyricsLazily(env, row, { title: batch.title });
+      if (lyrics !== undefined) {
+        await updateLyricsProgress(env, batchToken);
       }
     }
     await setRequestStatus(env.DB, row.req_token, "delivered");
@@ -801,7 +783,7 @@ export async function deliverAlbumFile(
 }
 
 // Per-track route (≤ threshold): the bridge's normal lyq:file delivery
-// finds an album_token row — cache, lazy page, flip, nudge. (The album
+// finds an album_token row — cache, lazy lyrics, flip, nudge. (The album
 // route uses deliverAlbumFile instead.)
 export async function deliverSelectedTrackFile(env: Env, row: AudioRequestRow, fileId: string): Promise<void> {
   try {
@@ -817,14 +799,9 @@ export async function deliverSelectedTrackFile(env: Env, row: AudioRequestRow, f
     const rows = await getRequestsByAlbumToken(env.DB, row.album_token!);
     const selectedIds = parseSelected(batch.selected, rows);
     if (selectedIds.has(row.track_id)) {
-      const page = await buildTrackPageLazily(env, row, {
-        title: batch.title,
-        coverUrl: batch.cover_url,
-        releaseDate: batch.release_date,
-      });
-      if (page) {
-        await setRequestTelegraphUrl(env.DB, row.req_token, page);
-        await updatePageProgress(env, row.album_token!);
+      const lyrics = await buildTrackLyricsLazily(env, row, { title: batch.title });
+      if (lyrics !== undefined) {
+        await updateLyricsProgress(env, row.album_token!);
       }
     }
     await setRequestStatus(env.DB, row.req_token, "delivered");
@@ -932,34 +909,18 @@ export async function onAlbumProgress(env: Env, albumToken: string): Promise<boo
       return false;
     }
 
-    // Backfill pages for cached-delivered rows: page builds normally happen
-    // in the delivery webhook, but cache-first rows are flipped without one.
-    // Parallel chunks of 4 keep the burst gentle on Telegraph (~5 waves for
-    // a 20-track album).
-    const albumForPages = {
-      title: batch.title,
-      coverUrl: batch.cover_url ?? "",
-      releaseDate: batch.release_date ?? "Unknown",
-    };
-    const needPages = relevant.filter((r) => r.status === "delivered" && !r.telegraph_url);
-    for (let i = 0; i < needPages.length; i += 4) {
-      const chunk = needPages.slice(i, i + 4);
+    // Backfill lyrics for cache-first rows: lyrics builds normally happen
+    // in the delivery webhook, but cached rows are flipped without one.
+    // Parallel chunks of 4 (LRCLIB is fine with that).
+    const needLyrics = relevant.filter((r) => r.status === "delivered");
+    for (let i = 0; i < needLyrics.length; i += 4) {
+      const chunk = needLyrics.slice(i, i + 4);
       await Promise.all(chunk.map(async (row) => {
-        const page = await buildTrackPageLazily(env, row, albumForPages);
-        if (page) {
-          try {
-            await setRequestTelegraphUrl(env.DB, row.req_token, page);
-          } catch (error) {
-            warn("album: page backfill persist failed", row.track_id, error);
-          }
-        }
+        await buildTrackLyricsLazily(env, row, { title: batch.title });
       }));
-      // The chunk's successes are persisted by now — recount and show it.
-      await updatePageProgress(env, albumToken);
+      // The chunk's results are persisted by now — recount and show it.
+      await updateLyricsProgress(env, albumToken);
     }
-    // Fresh read: backfilled urls must be visible to the tracks[] assembly.
-    const freshRows = needPages.length ? await getRequestsByAlbumToken(env.DB, albumToken) : rows;
-    const relevantFresh = freshRows.filter((r) => selectedIds.has(r.track_id));
 
     let position: RichPosition = "center";
     let color: RichColor = "primary";
@@ -972,25 +933,21 @@ export async function onAlbumProgress(env: Env, albumToken: string): Promise<boo
       // defaults stand
     }
 
-    const tracks: Array<{ trackName: string; trackId: number; telegraphUrl: string; fileId?: string }> = [];
-    for (const row of relevantFresh) {
-      let fileId: string | undefined;
-      if (row.status === "delivered") {
-        try {
-          fileId = (await getTrackRecord(env.DB, row.track_id))?.file_id ?? undefined;
-        } catch (error) {
-          warn("album: file_id lookup failed", row.track_id, error);
-        }
-      }
-      tracks.push({
-        trackName: row.track_title ?? "Unknown Track",
-        trackId: row.track_id,
-        telegraphUrl: row.telegraph_url ?? "",
-        fileId,
-      });
-    }
+    // One batch store read for every selected track: file_id + lyrics feed
+    // the message builder; lyrics = null renders a player-only section.
+    const selectedRows = relevant;
+    const fileIds = await getTrackFileIds(env.DB, selectedRows.map((r) => r.track_id));
+    const lyricsMap = await getTrackLyrics(env.DB, selectedRows.map((r) => r.track_id));
+    const tracks = selectedRows.map((row) => ({
+      trackName: row.track_title ?? "Unknown Track",
+      trackId: row.track_id,
+      lyrics: lyricsMap.has(row.track_id)
+        ? normalizeLyrics(lyricsMap.get(row.track_id)!)
+        : null,
+      fileId: row.status === "delivered" ? fileIds.get(row.track_id) : undefined,
+    }));
 
-    const { html, media } = buildAlbumRichMessage({
+    const messages = buildAlbumRichMessages({
       albumTitle: batch.title,
       artistName: batch.artist,
       coverUrl: batch.cover_url,
@@ -1000,37 +957,46 @@ export async function onAlbumProgress(env: Env, albumToken: string): Promise<boo
     });
 
     const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
-    // Rich send with a hard fallback: a rejection here (e.g. one malformed
-    // media entry) used to kill assembly AFTER the guarded flip — the batch
-    // was complete in D1 but the status message stayed "⏳ Fetching"
-    // forever, and Cancel correctly refused ("already finished"). The
-    // fallback is a plain sendAudio per delivered track, which cannot be
-    // poisoned by rich-html quirks.
-    let sentMsgId: number | undefined;
-    try {
-      const msg = await (api as any).sendRichMessage(batch.chat_id, {
-        html,
-        media,
-        skip_entity_detection: true,
-      });
-      sentMsgId = msg?.message_id;
-    } catch (error) {
-      warn("album: rich album send failed, falling back to plain audio sends", error);
-    }
-    if (sentMsgId) {
-      await setBatchAlbumMsg(env.DB, albumToken, sentMsgId);
-    } else {
-      for (const track of tracks) {
-        if (!track.fileId) continue;
-        try {
-          await api.sendAudio(batch.chat_id, track.fileId, {
-            caption: `<b>${escapeHtml(track.trackName)}</b>`,
-            parse_mode: "HTML",
-          });
-        } catch (error) {
-          warn("album: plain fallback audio send failed", track.trackId, error);
+    // Rich send per message with a hard fallback: a rejection here (e.g. one
+    // malformed media entry) used to kill assembly AFTER the guarded flip —
+    // the batch was complete in D1 but the status message stayed "⏳
+    // Fetching" forever, and Cancel correctly refused ("already finished").
+    // The fallback is a plain sendAudio per delivered track of that message,
+    // which cannot be poisoned by rich-html quirks.
+    let firstMsgId: number | undefined;
+    for (const message of messages) {
+      let sent = false;
+      try {
+        const msg = await (api as any).sendRichMessage(batch.chat_id, {
+          html: message.html,
+          media: message.media,
+          skip_entity_detection: true,
+        });
+        if (msg?.message_id) {
+          sent = true;
+          firstMsgId ??= msg.message_id;
+        }
+      } catch (error) {
+        warn("album: rich album send failed, falling back to plain audio sends", error);
+      }
+      if (!sent) {
+        // The message's tracks are the fileIds its media[] references — but
+        // after a failed rich send the ids aren't resolvable from media[]
+        // alone; fall back over the tracks in this message's order via the
+        // builder's media (media[].media carries the fileId itself).
+        for (const entry of message.media) {
+          try {
+            await api.sendAudio(batch.chat_id, entry.media.media, {
+              caption: "",
+            });
+          } catch (error) {
+            warn("album: plain fallback audio send failed", error);
+          }
         }
       }
+    }
+    if (firstMsgId) {
+      await setBatchAlbumMsg(env.DB, albumToken, firstMsgId);
     }
 
     const okCount = tracks.filter((t) => t.fileId).length;

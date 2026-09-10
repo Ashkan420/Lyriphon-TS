@@ -150,6 +150,26 @@ export async function getTrackFileIds(db: D1Database, trackIds: number[]): Promi
   return out;
 }
 
+// Batch lyrics lookup for the album assembly: maps track_id → lyrics for
+// every id that has a record ("" = checked, no lyrics found; missing key =
+// never looked up). One IN-query for the whole album.
+export async function getTrackLyrics(db: D1Database, trackIds: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const ids = [...new Set(trackIds.filter((id) => Number.isFinite(id)))];
+  if (!ids.length) return out;
+  await ensureTable(db);
+  const binds = ids.map((_, i) => `?${i + 1}`).join(", ");
+  const { results } = await db.prepare(
+    `SELECT track_id, lyrics FROM tracks WHERE lyrics IS NOT NULL AND track_id IN (${binds})`,
+  )
+    .bind(...ids)
+    .all<{ track_id: number; lyrics: string }>();
+  for (const row of results ?? []) {
+    out.set(row.track_id, row.lyrics);
+  }
+  return out;
+}
+
 // Escape LIKE wildcards so a literal "%"/"_" in a title doesn't widen the match.
 function likeEscape(text: string): string {
   return text.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");

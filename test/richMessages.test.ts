@@ -6,7 +6,7 @@ import {
   buildTrackResultHtml,
   buildRichAudioDelivery,
   buildRichOptionDemo,
-  buildAlbumRichMessage,
+  buildAlbumRichMessages,
   sendRichAudio,
   TrackProgressReporter,
 } from "../src/utils/richMessages";
@@ -174,7 +174,7 @@ describe("buildRichOptionDemo", () => {
   });
 });
 
-describe("buildAlbumRichMessage", () => {
+describe("buildAlbumRichMessages", () => {
   const base = {
     albumTitle: "2001",
     artistName: "Dr. Dre",
@@ -183,87 +183,90 @@ describe("buildAlbumRichMessage", () => {
     color: "primary" as const,
   };
 
-  it("cover + credit on top, one player + Lyrics button per delivered track", () => {
-    const { html, media } = buildAlbumRichMessage({
+  it("cover + credit on top, one player + expandable lyrics per delivered track", () => {
+    const [msg] = buildAlbumRichMessages({
       ...base,
       tracks: [
-        { trackName: "Still D.R.E.", trackId: 1, telegraphUrl: "https://telegra.ph/a", fileId: "F1" },
-        { trackName: "The Next Episode", trackId: 2, telegraphUrl: "https://telegra.ph/b", fileId: "F2" },
+        { trackName: "Still D.R.E.", trackId: 1, lyrics: "line1\nline2", fileId: "F1" },
+        { trackName: "The Next Episode", trackId: 2, lyrics: "", fileId: "F2" },
       ],
     });
+    const html = msg.html;
     expect(html).toContain('<img src="https://e-cdns.dzcdn.net/cover.jpg"/>');
     expect(html).toContain("<figcaption>Dr. Dre — 2001</figcaption>");
     expect(html).toContain("<hr/>");
-    expect(html).toContain('tg://audio?id=trk1');
-    expect(html).toContain('tg://audio?id=trk2');
-    expect(html).toContain('<tg-button type="url" style="primary" url="https://telegra.ph/a">Lyrics</tg-button>');
-    expect(html).toContain('<tg-button type="url" style="primary" url="https://telegra.ph/b">Lyrics</tg-button>');
-    // Media entries in track order, referencing the file_ids.
-    expect(media).toEqual([
+    expect(html).toContain("tg://audio?id=trk1");
+    expect(html).toContain("tg://audio?id=trk2");
+    // Inline expandable lyrics with <br/> line joins.
+    expect(html).toContain("<details><summary>🎵 Still D.R.E.</summary><p>line1<br/>line2</p></details>");
+    // Empty lyrics (checked, none) → player only, no empty details block.
+    expect(html).not.toContain("The Next Episode</summary>");
+    expect(msg.media).toEqual([
       { id: "trk1", media: { type: "audio", media: "F1" } },
       { id: "trk2", media: { type: "audio", media: "F2" } },
     ]);
   });
 
   it("failed tracks render as deezload note lines, not players", () => {
-    const { html, media } = buildAlbumRichMessage({
+    const [msg] = buildAlbumRichMessages({
       ...base,
       tracks: [
-        { trackName: "Okay", trackId: 11, telegraphUrl: "https://telegra.ph/ok", fileId: "F1" },
-        { trackName: "Broken", trackId: 22, telegraphUrl: "" },
+        { trackName: "Okay", trackId: 11, lyrics: null, fileId: "F1" },
+        { trackName: "Broken", trackId: 22, lyrics: null },
       ],
     });
-    expect(html).toContain('tg://audio?id=trk1');
-    expect(html).toContain("🎵 Broken — ");
-    expect(html).toContain('href="https://t.me/deezload2bot?start=deezerttrack22"');
-    expect(html).not.toContain("trk2");
-    expect(media).toHaveLength(1);
+    expect(msg.html).toContain("tg://audio?id=trk1");
+    expect(msg.html).toContain("🎵 Broken — ");
+    expect(msg.html).toContain('href="https://t.me/deezload2bot?start=deezerttrack22"');
+    expect(msg.html).not.toContain("trk2");
+    expect(msg.media).toHaveLength(1);
   });
 
-  it("applies position and color knobs; default color omits the style attr", () => {
-    const { html } = buildAlbumRichMessage({
+  it("escapes names and lyrics", () => {
+    const [msg] = buildAlbumRichMessages({
       ...base,
-      position: "right",
-      color: "default",
-      tracks: [{ trackName: "A", trackId: 1, telegraphUrl: "https://telegra.ph/a", fileId: "F1" }],
-    });
-    expect(html).toContain('<tg-button-row align="right">');
-    expect(html).not.toContain('style="default"');
-    expect(html).toContain('<tg-button type="url" url="https://telegra.ph/a">Lyrics</tg-button>');
-  });
-
-  it("escapes names and URLs", () => {
-    const { html } = buildAlbumRichMessage({
       albumTitle: 'A & B <C>',
       artistName: "D>E",
-      coverUrl: "https://c/1.jpg",
       tracks: [
-        { trackName: 'X "Y" & Z', trackId: 1, telegraphUrl: "https://telegra.ph/x?a=1&b=2", fileId: "F" },
+        { trackName: 'X "Y" & Z', trackId: 1, lyrics: "a<b & c", fileId: "F" },
         // Failed track: name appears in the deezload-note line.
-        { trackName: 'V <W> &', trackId: 2, telegraphUrl: "", },
+        { trackName: "V <W> &", trackId: 2, lyrics: null },
       ],
     });
-    expect(html).toContain("<figcaption>D&gt;E — A &amp; B &lt;C&gt;</figcaption>");
-    expect(html).toContain('url="https://telegra.ph/x?a=1&amp;b=2"');
-    expect(html).toContain("<p>🎵 V &lt;W&gt; &amp; — <a href=");
+    expect(msg.html).toContain("<figcaption>D&gt;E — A &amp; B &lt;C&gt;</figcaption>");
+    expect(msg.html).toContain("a&lt;b &amp; c");
+    expect(msg.html).toContain("<p>🎵 V &lt;W&gt; &amp; — <a href=");
   });
 
-  it("omits the per-player caption and the Lyrics button when no page exists", () => {
-    const { html } = buildAlbumRichMessage({
+  it("splits into several messages at the char limit; a track never splits from its lyrics", () => {
+    const lyricFor = (n: number) => `S${n} ` + "x".repeat(9000);
+    const messages = buildAlbumRichMessages({
       ...base,
       tracks: [
-        { trackName: "With Page", trackId: 1, telegraphUrl: "https://telegra.ph/p", fileId: "F1" },
-        { trackName: "No Page", trackId: 2, telegraphUrl: "", fileId: "F2" },
+        { trackName: "T1", trackId: 1, lyrics: lyricFor(1), fileId: "F1" },
+        { trackName: "T2", trackId: 2, lyrics: lyricFor(2), fileId: "F2" },
+        { trackName: "T3", trackId: 3, lyrics: lyricFor(3), fileId: "F3" },
+        { trackName: "T4", trackId: 4, lyrics: lyricFor(4), fileId: "F4" },
       ],
     });
-    // Player sections carry no figcaption — the audio bubble shows the
-    // file's own title/performer.
-    expect(html).not.toContain("<figcaption>X");
-    const playerSections = html.split("<figure><audio").length - 1;
-    expect(playerSections).toBe(2);
-    expect(html).toContain("<tg-button type=\"url\" style=\"primary\" url=\"https://telegra.ph/p\">Lyrics</tg-button>");
-    // The pageless player must not render an empty-url button row.
-    expect(html).not.toContain('url=""');
+    expect(messages.length).toBeGreaterThan(1);
+    for (const msg of messages) {
+      // Every message stays under the rich hard cap.
+      expect(msg.html.length).toBeLessThanOrEqual(32768);
+      // Every media entry resolves: its tg://audio?id=trkN ref exists once.
+      for (let j = 0; j < msg.media.length; j++) {
+        expect(msg.html).toContain(`tg://audio?id=trk${j + 1}`);
+      }
+      expect(msg.media.length).toBeLessThanOrEqual(50);
+    }
+    // Each lyrics body appears whole exactly once across all messages.
+    const all = messages.map((m) => m.html).join("\n");
+    for (let n = 1; n <= 4; n++) {
+      expect(all.split(lyricFor(n)).length - 1).toBe(1);
+    }
+    // Header only on the first message.
+    expect(messages[0].html).toContain("figcaption");
+    expect(messages.slice(1).every((m) => !m.html.includes("figcaption"))).toBe(true);
   });
 });
 

@@ -408,59 +408,104 @@ export interface RichAudioOpts {
 }
 
 // The assembled admin /album result: cover + credit on top, then one audio
-// player + Lyrics button per delivered track, with failed tracks as plain
-// deezload lines. The cover is a plain HTTP <img> (no media entry needed);
-// each player resolves its own media[] entry (trk1…trkN in order).
-export function buildAlbumRichMessage(options: {
+// player per delivered track with its lyrics inline in an expandable
+// <details> section (no Telegraph — the album message is self-contained),
+// failed tracks as plain deezload lines. Tracks never split from their
+// lyrics; when the total exceeds ALBUM_MSG_CHAR_LIMIT the result is several
+// rich messages (header only on the first, failed-track lines on the last).
+// The cover is a plain HTTP <img> (no media entry needed); each player
+// resolves its own media[] entry (trk1…trkN restart per message).
+export const ALBUM_MSG_CHAR_LIMIT = 30000; // headroom under the 32768 hard cap
+
+type AlbumTrackInput = {
+  trackName: string;
+  trackId: number;
+  lyrics: string | null;
+  fileId?: string;
+};
+
+type AlbumRichMessage = { html: string; media: Array<{ id: string; media: { type: "audio"; media: string } }> };
+
+function buildTrackSection(track: AlbumTrackInput, mediaIndex: number): {
+  html: string;
+  media?: { id: string; media: { type: "audio"; media: string } };
+} {
+  const esc = escapeRichHtml;
+  const name = esc(track.trackName);
+  if (!track.fileId) {
+    return {
+      html: `<p>🎵 ${name} — <a href="${DEEZLOAD_BOT}deezerttrack${track.trackId}">grab from deezload</a></p>`,
+    };
+  }
+  const mediaId = `trk${mediaIndex + 1}`;
+  const media = { id: mediaId, media: { type: "audio" as const, media: track.fileId } };
+  // Lyrics inline in an expandable section; empty (checked, none found or
+  // build error) → player only.
+  const lyrics = track.lyrics ?? "";
+  const details = lyrics
+    ? `\n<details><summary>🎵 ${name}</summary><p>` +
+      esc(lyrics).replace(/\r\n|\r|\n/g, "<br/>") +
+      `</p></details>`
+    : "";
+  return {
+    html: `<figure><audio src="tg://audio?id=${mediaId}"></audio></figure>${details}`,
+    media,
+  };
+}
+
+export function buildAlbumRichMessages(options: {
   albumTitle: string;
   artistName: string;
   coverUrl: string;
-  tracks: Array<{
-    trackName: string;
-    trackId: number;
-    telegraphUrl: string;
-    fileId?: string;
-  }>;
+  tracks: AlbumTrackInput[];
   position?: RichPosition;
   color?: RichColor;
-}): { html: string; media: Array<{ id: string; media: { type: "audio"; media: string } }> } {
+}): AlbumRichMessage[] {
   const esc = escapeRichHtml;
-  const position = options.position ?? "center";
-  const color = options.color ?? "primary";
-  const styleAttr = color === "default" ? "" : ` style="${color}"`;
 
-  const media: Array<{ id: string; media: { type: "audio"; media: string } }> = [];
-  const sections: string[] = [
+  const header =
     `<figure><img src="${esc(options.coverUrl)}"/>` +
-    `<figcaption>${esc(options.artistName)} — ${esc(options.albumTitle)}</figcaption></figure>`,
-    "<hr/>",
-  ];
+    `<figcaption>${esc(options.artistName)} — ${esc(options.albumTitle)}</figcaption></figure>\n<hr/>`;
 
-  options.tracks.forEach((track, i) => {
-    const name = esc(track.trackName);
-    if (track.fileId) {
-      const mediaId = `trk${i + 1}`;
-      media.push({ id: mediaId, media: { type: "audio", media: track.fileId } });
-      // No caption under the player — the audio bubble renders the file's
-      // own title/performer natively. A page-build failure omits the Lyrics
-      // button instead of emitting url="" (a rich-API rejection that would
-      // poison the WHOLE album message).
-      sections.push(
-        `<figure><audio src="tg://audio?id=${mediaId}"></audio></figure>` +
-        (track.telegraphUrl
-          ? `\n<tg-button-row align="${position}">` +
-            `<tg-button type="url"${styleAttr} url="${esc(track.telegraphUrl)}">Lyrics</tg-button>` +
-            `</tg-button-row>`
-          : ""),
-      );
-    } else {
-      sections.push(
-        `<p>🎵 ${name} — <a href="${DEEZLOAD_BOT}deezerttrack${track.trackId}">grab from deezload</a></p>`,
-      );
+  // Greedy per-track packing: a track (player + its lyrics) is never split,
+  // so a section overflows to the next message as a whole. The section is
+  // built AFTER placement is decided — the media id depends on how many
+  // delivered tracks the message already holds.
+  type Packed = { parts: string[]; mediaFiles: string[] };
+  const messages: Packed[] = [];
+  let current: Packed | undefined;
+  let currentLen = 0;
+
+  for (const track of options.tracks) {
+    const delivered = Boolean(track.fileId);
+    const prospectiveIndex = current ? current.mediaFiles.length : 0;
+    let section = buildTrackSection(track, delivered ? prospectiveIndex : 0);
+    const sectionLen = section.html.length + 1; // + join newline
+    const nextLen = (currentLen || 0) + sectionLen;
+    if (!current || nextLen > ALBUM_MSG_CHAR_LIMIT) {
+      current = { parts: [], mediaFiles: [] };
+      messages.push(current);
+      currentLen = 0;
+      if (messages.length === 1) {
+        current.parts.push(header);
+        currentLen = header.length;
+      }
+      if (delivered) {
+        section = buildTrackSection(track, 0);
+      }
     }
-  });
+    current.parts.push(section.html);
+    currentLen += section.html.length + 1;
+    if (delivered) current.mediaFiles.push(track.fileId!);
+  }
 
-  return { html: sections.join("\n"), media };
+  return messages.map((msg) => ({
+    html: msg.parts.join("\n"),
+    media: msg.mediaFiles.map((fileId, j) => ({
+      id: `trk${j + 1}`,
+      media: { type: "audio" as const, media: fileId },
+    })),
+  }));
 }
 
 // Send the rich audio delivery. Returns the sent message, or null on any
