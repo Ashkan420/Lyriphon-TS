@@ -42,6 +42,7 @@ import {
 } from "../utils/richMessages";
 import { AUTOFETCH_MAX_PENDING_PER_USER } from "../config";
 import { log, warn } from "../utils/logger";
+import { isBotOwner } from "./admin";
 
 // In-flight dedup: one pipeline run per inline message (per isolate). A
 // second tap while a run is pending gets "Already working on it!" instead of
@@ -72,6 +73,8 @@ export async function handleInlineTrackButton(ctx: Context, env: Env) {
     inlineMessageId,
     trackId,
     userId: String(ctx.from?.id ?? ""),
+    username: ctx.from?.username,
+    isOwner: isBotOwner(ctx, env),
   });
 }
 
@@ -101,6 +104,10 @@ export async function handleChosenInlineResult(env: Env, chosen: any): Promise<v
     inlineMessageId,
     trackId,
     userId: String(chosen?.from?.id ?? ""),
+    username: chosen?.from?.username,
+    // chosen_inline_result carries only the user id, so owner status is
+    // resolved against the configured owner id directly.
+    isOwner: Boolean(env.BOT_OWNER_ID) && String(chosen?.from?.id ?? "") === env.BOT_OWNER_ID,
   });
 }
 
@@ -108,11 +115,11 @@ export async function handleChosenInlineResult(env: Env, chosen: any): Promise<v
 // isolate). Callers check inFlight for their own user-facing busy feedback.
 async function startPipelineRun(
   env: Env,
-  args: { inlineMessageId: string; trackId: number; userId: string },
+  args: { inlineMessageId: string; trackId: number; userId: string; username?: string; isOwner?: boolean },
 ): Promise<void> {
-  const { inlineMessageId, trackId, userId } = args;
+  const { inlineMessageId, trackId, userId, username, isOwner } = args;
 
-  const run = runInlineTrackPipeline(env, { inlineMessageId, trackId, userId })
+  const run = runInlineTrackPipeline(env, { inlineMessageId, trackId, userId, username, isOwner })
     .catch((error) => warn("inline pipeline: run failed", error))
     .finally(() => inFlight.delete(inlineMessageId));
   inFlight.set(inlineMessageId, run);
@@ -121,9 +128,9 @@ async function startPipelineRun(
 
 async function runInlineTrackPipeline(
   env: Env,
-  args: { inlineMessageId: string; trackId: number; userId: string },
+  args: { inlineMessageId: string; trackId: number; userId: string; username?: string; isOwner?: boolean },
 ): Promise<void> {
-  const { inlineMessageId, trackId, userId } = args;
+  const { inlineMessageId, trackId, userId, username, isOwner } = args;
   const api = new Api(env.BOT_TOKEN);
 
   const progress = new InlineTrackProgress(api, inlineMessageId);
@@ -196,6 +203,10 @@ async function runInlineTrackPipeline(
   try {
     const telegraphResult = await createSongTelegraph(env, {
       authorName: "Lyriphon",
+      // The author *name* stays "Lyriphon" on this path, but the link still
+      // identifies who asked, so /edit can admit the right person. The owner
+      // keeps the channel link — they can already edit any page.
+      authorUrl: isOwner || !username ? undefined : `https://t.me/${username}`,
       track: trackName,
       trackId,
       artist: artistName,

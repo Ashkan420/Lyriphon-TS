@@ -505,3 +505,42 @@ describe("TrackProgressReporter", () => {
     ]);
   });
 });
+
+// /edit reopens an existing page, so its card must not claim a page was
+// created and must not nudge about attaching audio.
+describe("buildTrackResultHtml fetched variant", () => {
+  const base = {
+    trackName: "Through The Wire",
+    artistName: "Kanye West",
+    albumName: "The College Dropout",
+    releaseDate: "2004-02-10",
+    telegraphUrl: "https://telegra.ph/Through-The-Wire-09-27",
+    authorName: "Ashkan",
+  };
+
+  it("says 'Telegraph Fetched' when reopening a page", () => {
+    const html = buildTrackResultHtml({ ...base, hasAudio: false, fetched: true });
+    expect(html).toContain("Telegraph Fetched");
+    expect(html).not.toContain("Telegraph Created");
+  });
+
+  it("omits the attach-audio nudge on the fetched card", () => {
+    const html = buildTrackResultHtml({ ...base, hasAudio: false, fetched: true });
+    expect(html).not.toContain("Send a music file");
+  });
+
+  it("keeps the song block and the page link", () => {
+    const html = buildTrackResultHtml({ ...base, hasAudio: false, fetched: true });
+    expect(html).toContain("Through The Wire");
+    expect(html).toContain("Kanye West");
+    expect(html).toContain("The College Dropout");
+    expect(html).toContain("2004-02-10");
+    expect(html).toContain("https://telegra.ph/Through-The-Wire-09-27");
+  });
+
+  it("leaves the created-card wording unchanged", () => {
+    const html = buildTrackResultHtml({ ...base, hasAudio: false });
+    expect(html).toContain("Telegraph Created");
+    expect(html).toContain("Send a music file");
+  });
+});

@@ -178,6 +178,13 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   try {
     telegraphResult = await createSongTelegraph(env, {
       authorName,
+      // The creator's Telegram link becomes the page's owner marker for
+      // /edit. The owner's own pages keep the channel link instead — the
+      // owner can already edit any page, so their pages need no marker and
+      // should look like everyone else's.
+      authorUrl: isBotOwner(ctx, env) || !ctx.from?.username
+        ? undefined
+        : `https://t.me/${ctx.from.username}`,
       track: trackName,
       trackId,
       artist: artistName,

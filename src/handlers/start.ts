@@ -22,6 +22,7 @@ export async function helpCommand(ctx: Context) {
   const helpText = `Lyriphon Bot Commands
 
 /song - Search for a song and create a lyrics page
+/edit - Edit a page you made, by its Telegraph link
 /settings - Manage your preferences (auto-get music, link previews)
 /help - Show this help message
 
