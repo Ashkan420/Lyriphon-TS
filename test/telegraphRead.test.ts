@@ -370,3 +370,51 @@ describe("carried-through content is not reformatted", () => {
 
 // FR-004 / SC-009: new pages record the creator's Telegram link so /edit can
 // identify them by identity. The rendered body must be byte-identical to
+
+// SC-009: new pages record the creator's Telegram link so /edit can identify
+// them by identity. The rendered body must be byte-identical either way — the
+// link is metadata, not content.
+describe("createSongTelegraph author_url", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const base = {
+    track: "Shape of You", trackId: 123, artist: "Ed Sheeran", artistId: 456,
+    album: "Divide", albumId: 789, albumCoverUrl: "https://img/cover.jpg",
+    releaseDate: "2017-03-03", lyrics: "Line one",
+  };
+
+  async function createWith(authorUrl?: string) {
+    const { createSongTelegraph } = await import("../src/services/telegraph");
+    let sent: any = null;
+    mockFetch((_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ ok: true, result: { path: "new-page" } }), { status: 200 });
+    });
+    const out = await createSongTelegraph(env, { ...base, authorName: "Ashkan", authorUrl });
+    return { sent, out };
+  }
+
+  it("records the creator's Telegram link when they have a username", async () => {
+    const { sent, out } = await createWith("https://t.me/ashkan420");
+    expect(sent.author_url).toBe("https://t.me/ashkan420");
+    // Carried into lastData so a later edit writes it back rather than
+    // replacing it with the channel constant.
+    expect(out.lastData.authorUrl).toBe("https://t.me/ashkan420");
+  });
+
+  it("falls back to the channel link when the creator has no username", async () => {
+    const { sent, out } = await createWith(undefined);
+    expect(sent.author_url).toBe("https://t.me/bichniga");
+    expect(out.lastData.authorUrl).toBe("https://t.me/bichniga");
+  });
+
+  it("leaves the author name and the rendered body unchanged", async () => {
+    const withLink = await createWith("https://t.me/ashkan420");
+    const withoutLink = await createWith(undefined);
+    expect(withLink.sent.author_name).toBe("Ashkan");
+    expect(JSON.stringify(withLink.sent.content)).toBe(JSON.stringify(withoutLink.sent.content));
+  });
+});

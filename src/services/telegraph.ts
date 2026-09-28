@@ -136,6 +136,10 @@ export interface TelegraphPageData {
 
 export async function createSongTelegraph(env: Env, options: {
   authorName: string;
+  // The creator's Telegram link, recorded as the page's author_url. It is the
+  // page's owner marker for /edit. Omitted when the creator has no username,
+  // in which case the channel link is kept as before.
+  authorUrl?: string;
   track: string;
   trackId: number;
   artist: string;
@@ -146,7 +150,7 @@ export async function createSongTelegraph(env: Env, options: {
   releaseDate: string;
   lyrics: string;
 }) {
-  const { authorName, track, trackId, artist, artistId, album, albumId, albumCoverUrl, releaseDate, lyrics } = options;
+  const { authorName, authorUrl, track, trackId, artist, artistId, album, albumId, albumCoverUrl, releaseDate, lyrics } = options;
   const trackLink = `${DEEZLOAD_BOT}deezerttrack${trackId}`;
   const artistLink = `${DEEZLOAD_BOT}deezertartist${artistId}`;
   const albumLink = `${DEEZLOAD_BOT}deezertalbum${albumId}`;
@@ -170,6 +174,7 @@ export async function createSongTelegraph(env: Env, options: {
     // The creator's own link when they have a username, so /edit can identify
     // them by identity rather than by display name. The author *name* is
     // unchanged, so nothing visible on the page changes.
+    author_url: authorUrl ?? CHANNEL_LINK,
     return_content: true,
     content,
   }) as any;
@@ -182,6 +187,7 @@ export async function createSongTelegraph(env: Env, options: {
     path: data.result.path,
     lastData: {
       authorName,
+      authorUrl: authorUrl ?? CHANNEL_LINK,
       track,
       trackLink,
       artist,
