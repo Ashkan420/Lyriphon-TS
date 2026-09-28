@@ -28,5 +28,11 @@ data/
 .mimocode/
 .claude/
 
+# Spec Kit (specs-only repo, has its own .git — never committed here)
+# Anchored with a leading slash so only the top-level specs/ is ignored.
+# specs/ holds its own .git, so an unanchored pattern would also hide
+# specs/*/source code; the slash keeps the app's source tree visible.
+/specs/
+
 # Misc artifacts
 Lyriphon.zip
