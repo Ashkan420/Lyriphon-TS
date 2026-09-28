@@ -18,6 +18,7 @@ import {
   getUserLinkPreviewEnabled,
   setUserAutoFetchEnabled,
   setUserLinkPreviewEnabled,
+  isRichDeliveryEnabled,
   isUserRichDeliveryEnabled,
   setUserRichDeliveryEnabled,
   getUserRichStyle,
@@ -89,6 +90,7 @@ export function buildSettingsText(
   globalDisabled: boolean,
   previewsOn: boolean,
   richOn: boolean,
+  richGlobalDisabled: boolean,
 ): string {
   const lines = [
     "⚙️ <b>Your settings</b>",
@@ -110,6 +112,13 @@ export function buildSettingsText(
     lines.push(
       "",
       "⚠️ Auto-get is temporarily unavailable — it's turned off for everyone right now. Check back later.",
+    );
+  }
+
+  if (richGlobalDisabled) {
+    lines.push(
+      "",
+      "⚠️ Rich music delivery is temporarily unavailable — it's turned off for everyone right now. Check back later.",
     );
   }
 
@@ -157,17 +166,19 @@ export function buildSettingsKeyboard(
 }
 
 async function readPrefs(env: Env, userId: string) {
-  const [globalOn, userAuto, previews, userRich] = await Promise.all([
+  const [globalOn, userAuto, previews, richGlobal, userRich] = await Promise.all([
     isAutoFetchEnabled(env.DB).catch(() => false),
     isUserAutoFetchEnabled(env.DB, userId),
     getUserLinkPreviewEnabled(env.DB, userId),
+    isRichDeliveryEnabled(env.DB).catch(() => false),
     isUserRichDeliveryEnabled(env.DB, userId),
   ]);
   return {
     autoFetchOn: globalOn && userAuto,
     globalDisabled: !globalOn,
     previewsOn: previews,
-    richOn: userRich,
+    richOn: richGlobal && userRich,
+    richGlobalDisabled: !richGlobal,
   };
 }
 
@@ -177,7 +188,7 @@ export async function handleSettingsCommand(ctx: Context, env: Env): Promise<voi
   try {
     const prefs = await readPrefs(env, userId);
     await ctx.reply(
-      buildSettingsText(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn, prefs.richOn),
+      buildSettingsText(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn, prefs.richOn, prefs.richGlobalDisabled),
       {
         parse_mode: "HTML",
         reply_markup: {
@@ -293,6 +304,11 @@ async function editSelectorWithState(
 // "Rich styles" entry from the main panel: replace any stale picker with a
 // fresh one (self-healing instead of an "already open" alert).
 async function openRichStylePicker(ctx: Context, env: Env, userId: string): Promise<void> {
+  const richGlobal = await isRichDeliveryEnabled(env.DB).catch(() => false);
+  if (!richGlobal) {
+    await safeAnswer(ctx, "Rich music delivery is temporarily unavailable.");
+    return;
+  }
   const richOn = await isUserRichDeliveryEnabled(env.DB, userId);
   if (!richOn) {
     await safeAnswer(ctx, "Turn on Rich music delivery first.");
@@ -530,6 +546,12 @@ export async function handleSettingsCallback(ctx: Context, env: Env): Promise<vo
       }
       await setUserAutoFetchEnabled(env.DB, userId, !prefs.autoFetchOn);
     } else if (data === "settings_toggle_rich") {
+      const richGlobal = await isRichDeliveryEnabled(env.DB).catch(() => false);
+      if (!richGlobal) {
+        // Feature is down for everyone — the button does nothing.
+        await safeAnswer(ctx, "Rich music delivery is temporarily unavailable.");
+        return;
+      }
       const richOn = await isUserRichDeliveryEnabled(env.DB, userId);
       await setUserRichDeliveryEnabled(env.DB, userId, !richOn);
     } else if (data === "settings_toggle_preview") {
@@ -550,7 +572,7 @@ export async function handleSettingsCallback(ctx: Context, env: Env): Promise<vo
   try {
     const prefs = await readPrefs(env, userId);
     await ctx.editMessageText(
-      buildSettingsText(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn, prefs.richOn),
+      buildSettingsText(prefs.autoFetchOn, prefs.globalDisabled, prefs.previewsOn, prefs.richOn, prefs.richGlobalDisabled),
       {
         parse_mode: "HTML",
         reply_markup: {

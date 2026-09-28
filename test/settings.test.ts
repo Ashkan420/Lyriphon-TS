@@ -180,14 +180,14 @@ describe("settings UI", () => {
     expect(off[3][0]).toMatchObject({ text: "🔗 Link previews: OFF", style: "danger" });
   });
 
-  it("text is plain-language and carries the global-off notice", () => {
-    const normal = buildSettingsText(true, false, true, true);
+  it("text is plain-language and carries the global-off notices", () => {
+    const normal = buildSettingsText(true, false, true, true, false);
     expect(normal).toContain("Auto-get music files");
     expect(normal).toContain("I fetch the audio for you automatically");
     expect(normal).toContain("Rich music delivery");
     expect(normal).toContain("preview card");
 
-    const globalOff = buildSettingsText(false, true, true, false);
+    const globalOff = buildSettingsText(false, true, true, false, true);
     expect(globalOff).toContain("temporarily unavailable");
     expect(globalOff).toContain("turned off for everyone");
   });
@@ -234,7 +234,8 @@ describe("settings callbacks", () => {
     expect(render).toContain("Link previews: <b>off</b>");
   });
 
-  it("rich toggle flips the rich pref (default off → on)", async () => {
+  it("rich toggle flips the rich pref (default off → on, global on)", async () => {
+    await setRichDeliveryEnabled(db, true);
     ctx.callbackQuery.data = "settings_toggle_rich";
 
     await handleSettingsCallback(ctx, makeEnv(db));
@@ -242,6 +243,43 @@ describe("settings callbacks", () => {
     expect(await isUserRichDeliveryEnabled(db, "555")).toBe(true);
     const render = ctx.editMessageText.mock.calls[0][0] as string;
     expect(render).toContain("Rich music delivery: <b>on</b>");
+  });
+
+  it("rich global off: toggle alerts and writes nothing even with user pref on", async () => {
+    // User pref on but the admin switch off → the toggle must no-op.
+    await setUserRichDeliveryEnabled(db, "555", true);
+
+    ctx.callbackQuery.data = "settings_toggle_rich";
+    await handleSettingsCallback(ctx, makeEnv(db));
+
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(expect.objectContaining({ text: "Rich music delivery is temporarily unavailable." }));
+    // The user pref was left untouched (still on).
+    expect(await isUserRichDeliveryEnabled(db, "555")).toBe(true);
+  });
+
+  it("rich global off: render shows the row OFF plus the global-off notice", async () => {
+    await setUserRichDeliveryEnabled(db, "555", true);
+    // isRichDeliveryEnabled stays false (default) → richGlobalDisabled.
+
+    await handleSettingsCommand(ctx, makeEnv(db));
+
+    const [text] = (ctx.reply as any).mock.calls[0];
+    expect(text).toContain("Rich music delivery: <b>off</b>");
+    expect(text).toContain("Rich music delivery is temporarily unavailable");
+  });
+
+  it("rich global on + user off: no notice and the toggle flips", async () => {
+    await setRichDeliveryEnabled(db, true);
+
+    await handleSettingsCommand(ctx, makeEnv(db));
+    const [text] = (ctx.reply as any).mock.calls[0];
+    expect(text).toContain("Rich music delivery: <b>off</b>");
+    expect(text).not.toContain("Rich music delivery is temporarily unavailable");
+
+    ctx.callbackQuery.data = "settings_toggle_rich";
+    await handleSettingsCallback(ctx, makeEnv(db));
+
+    expect(await isUserRichDeliveryEnabled(db, "555")).toBe(true);
   });
 
   it("command renders current prefs", async () => {
