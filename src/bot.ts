@@ -17,6 +17,7 @@ import { adminCommand, handleAdminCallback, isBotOwner } from "./handlers/admin"
 import { dbCommand, handleDbViewCallback, handleDbTextInput } from "./handlers/dbAdmin";
 import { handleSettingsCommand } from "./handlers/settings";
 import { albumCommand } from "./handlers/album";
+import { editCommandHandler } from "./handlers/editCommand";
 
 export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
   const bot = new Bot<Context>(env.BOT_TOKEN);
@@ -47,6 +48,11 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
 
   bot.command("album", async (ctx) => {
     await albumCommand(ctx, env);
+  });
+
+  bot.command("edit", async (ctx) => {
+    const session = getSession(sessionDo.sessionData);
+    await editCommandHandler(ctx, session, env);
   });
 
   bot.command("done", async (ctx) => {
