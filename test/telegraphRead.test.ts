@@ -368,9 +368,6 @@ describe("carried-through content is not reformatted", () => {
   });
 });
 
-// FR-004 / SC-009: new pages record the creator's Telegram link so /edit can
-// identify them by identity. The rendered body must be byte-identical to
-
 // SC-009: new pages record the creator's Telegram link so /edit can identify
 // them by identity. The rendered body must be byte-identical either way — the
 // link is metadata, not content.

@@ -121,7 +121,6 @@ export function buildEditMenu(
   return [
     [
       { text: "✏️ Lyrics", callback_data: "edit_field_lyrics" },
-      { text: "👑 Author", callback_data: "edit_field_author" },
     ],
     [
       { text: "📝 Track", callback_data: "edit_field_track" },

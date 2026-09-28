@@ -144,6 +144,7 @@ export async function editCommandHandler(ctx: Context, session: SessionData, env
     telegraphUrl: session.telegraph.url,
     authorName: pageData.authorName,
     hasAudio: false,
+    fetched: true,
   });
   const menu = buildEditMenu(false, adminToolsOpts(pageData.trackId, isBotOwner(ctx, env)));
 

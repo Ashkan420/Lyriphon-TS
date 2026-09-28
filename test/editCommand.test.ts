@@ -151,3 +151,72 @@ describe("failure paths leave the session untouched", () => {
   });
 });
 
+// The owner's own pages carry the channel link, not their username — they can
+// already edit any page via the owner override, so their pages need no
+// personal marker. This is the page state such a page produces, and the owner
+// must still be admitted through it.
+describe("owner pages use the channel link", () => {
+  it("still admits the owner on a page carrying the channel link", () => {
+    const ownerPage = { authorUrl: CHANNEL_LINK, authorName: "Ashkan" };
+    // Without the override, this only passes via the first-name fallback.
+    expect(checkPageOwnership(ownerPage, { name: "Ashkan", url: "https://t.me/ashkan420" }, true)).toBe(true);
+  });
+
+  it("still admits the owner when their first name does not match the page", () => {
+    const ownerPage = { authorUrl: CHANNEL_LINK, authorName: "Lyriphon" };
+    // The override is what carries this case — the name check would refuse.
+    expect(checkPageOwnership(ownerPage, { name: "Ashkan", url: "https://t.me/ashkan420" }, false)).toBe(false);
+    expect(checkPageOwnership(ownerPage, { name: "Ashkan", url: "https://t.me/ashkan420" }, true)).toBe(true);
+  });
+});
+
+// The owner override is the FIRST check, so it short-circuits before either
+// name-based comparison runs. Verified against live pages: the owner is
+// admitted on pages authored by other people, including a page whose author
+// link is a different user's t.me and a page carrying the channel link.
+describe("owner override short-circuits first", () => {
+  const OWNER_IDENTITY = { name: "Ashkan", url: "https://t.me/ashkan420" };
+  const env = { BOT_OWNER_ID: "111" } as any;
+  const ownerCtx = { from: { id: 111 } } as any;
+
+  it("admits the owner on a page owned by another user via their t.me link", () => {
+    const page = { authorUrl: "https://t.me/dogzushi", authorName: "Someone Else" };
+    expect(checkPageOwnership(page, OWNER_IDENTITY, false)).toBe(false);
+    expect(checkPageOwnership(page, OWNER_IDENTITY, isBotOwner(ownerCtx, env))).toBe(true);
+  });
+
+  it("admits the owner on a channel-link page whose name does not match", () => {
+    const page = { authorUrl: CHANNEL_LINK, authorName: "Lyriphon" };
+    expect(checkPageOwnership(page, OWNER_IDENTITY, false)).toBe(false);
+    expect(checkPageOwnership(page, OWNER_IDENTITY, isBotOwner(ownerCtx, env))).toBe(true);
+  });
+
+  it("keeps refusing non-owners on the same pages", () => {
+    const other = { name: "Sara", url: "https://t.me/sara" };
+    expect(checkPageOwnership({ authorUrl: "https://t.me/dogzushi", authorName: "Someone Else" }, other, false)).toBe(false);
+    expect(checkPageOwnership({ authorUrl: CHANNEL_LINK, authorName: "Lyriphon" }, other, false)).toBe(false);
+  });
+});
+
+// The expanded edit menu: Lyrics takes the whole first row and the Author
+// button is gone, per the owner's request.
+describe("buildEditMenu layout", () => {
+  it("gives Lyrics the whole first row", () => {
+    const menu = buildEditMenu(true);
+    expect(menu[0]).toHaveLength(1);
+    expect(menu[0][0].callback_data).toBe("edit_field_lyrics");
+  });
+
+  it("no longer offers the Author button", () => {
+    expect(JSON.stringify(buildEditMenu(true))).not.toContain("edit_field_author");
+  });
+
+  it("still offers the other fields", () => {
+    const flat = JSON.stringify(buildEditMenu(true));
+    for (const field of ["edit_field_track", "edit_field_artist", "edit_field_album",
+      "edit_field_date", "edit_field_cover", "edit_field_track_link",
+      "edit_field_artist_link", "edit_field_album_link"]) {
+      expect(flat).toContain(field);
+    }
+  });
+});

@@ -281,8 +281,16 @@ export function buildTrackResultHtml(options: {
   telegraphUrl: string;
   authorName: string;
   hasAudio: boolean;
+  // /edit reopens a page that already exists, so it reports "Fetched" and
+  // omits the "send a file to attach audio" nudge — there is no pending
+  // delivery on that path.
+  fetched?: boolean;
 }): string {
-  const status = options.hasAudio ? "Telegraph Created & Audio Attached" : "Telegraph Created";
+  const status = options.fetched
+    ? "Telegraph Fetched"
+    : options.hasAudio
+      ? "Telegraph Created & Audio Attached"
+      : "Telegraph Created";
   const esc = escapeRichHtml;
 
   let body =
@@ -292,7 +300,7 @@ export function buildTrackResultHtml(options: {
     `💽 ${esc(options.albumName)}\n` +
     `📅 ${esc(options.releaseDate)}</blockquote>\n\n`;
 
-  if (!options.hasAudio) {
+  if (!options.hasAudio && !options.fetched) {
     body += "Send a music file to attach the Lyrics button to it.\n\n";
   }
 
