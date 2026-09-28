@@ -54,12 +54,29 @@ export async function handleEditFieldCallback(ctx: Context, session: SessionData
   session.edit.promptId = prompt.message_id;
 }
 
+// Edit-menu field name -> TelegraphPageData property. These two vocabularies
+// do NOT match, and guessing silently wrote to a key the writer never reads:
+// `buildPageContent`/`editSongPage` read `authorName` and `albumCoverUrl`, so
+// writing `author_name` or `album_cover_url` left the page unchanged. Only
+// `track` and `artist` happened to line up, which is why those two worked and
+// the rest silently did not.
+const FIELD_TO_PAGE_KEY: Record<string, string> = {
+  track: "track",
+  artist: "artist",
+  album: "album",
+  date: "releaseDate",
+  author: "authorName",
+  cover: "albumCoverUrl",
+  track_link: "trackLink",
+  artist_link: "artistLink",
+  album_link: "albumLink",
+};
+
 export async function handleNewFieldValue(ctx: Context, session: SessionData, env: Env) {
   const field = session.edit.field;
   if (!field) {
     return;
   }
-
   if (field === "lyrics") {
     if (session.lyrics.locked) {
       return;
@@ -102,36 +119,23 @@ export async function handleNewFieldValue(ctx: Context, session: SessionData, en
     await safeDelete(ctx.api as any, ctx.chat.id, session.edit.promptId);
   }
 
+  const pageKey = FIELD_TO_PAGE_KEY[field];
+  if (!pageKey) {
+    return;
+  }
+
   if (urlFields.includes(field)) {
     if (newValue.toLowerCase() === "none") {
-      if (field === "cover") {
-        lastData.album_cover_url = "";
-      } else {
-        lastData[field] = "";
-      }
+      lastData[pageKey] = "";
     } else {
       if (!isValidUrl(newValue)) {
         await ctx.reply("❌ Invalid URL format");
         return;
       }
-      if (field === "cover") {
-        lastData.album_cover_url = newValue;
-      } else {
-        lastData[field] = newValue;
-      }
+      lastData[pageKey] = newValue;
     }
   } else {
-    if (field === "track") {
-      lastData.track = newValue;
-    } else if (field === "artist") {
-      lastData.artist = newValue;
-    } else if (field === "album") {
-      lastData.album = newValue;
-    } else if (field === "date") {
-      lastData.release_date = newValue;
-    } else if (field === "author") {
-      lastData.author_name = newValue;
-    }
+    lastData[pageKey] = newValue;
   }
 
   if (!(await tryEditSongPage(env, lastData, getDisplayLyrics(session) ?? "", `field ${field}`))) {

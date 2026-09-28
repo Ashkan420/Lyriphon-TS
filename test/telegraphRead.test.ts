@@ -418,3 +418,49 @@ describe("createSongTelegraph author_url", () => {
     expect(JSON.stringify(withLink.sent.content)).toBe(JSON.stringify(withoutLink.sent.content));
   });
 });
+
+// The edit menu writes fields through a DIFFERENT vocabulary than the one
+// buildPageContent reads. Pinned because the mismatch was silent: the handler
+// wrote `author_name`, the page came back unchanged, and it still replied
+// "✅ Updated". `lastData` is typed `any` in the session, so nothing but a
+// test would have caught it.
+describe("edit field -> page key mapping", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  async function writeAuthor(authorName: string) {
+    let sent: any = null;
+    mockFetch((_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ ok: true, result: { path: "p-1" } }), { status: 200 });
+    });
+    await editSongPage(
+      env,
+      { authorName, track: "T", trackLink: "", artist: "", artistLink: "", album: "",
+        albumLink: "", albumCoverUrl: "", releaseDate: "", path: "p-1" } as any,
+      "lyrics",
+    );
+    return sent;
+  }
+
+  it("reaches the wire for the author name", async () => {
+    expect((await writeAuthor("New Author")).author_name).toBe("New Author");
+  });
+
+  it("reaches the wire for the cover url", async () => {
+    let sent: any = null;
+    mockFetch((_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ ok: true, result: { path: "p-1" } }), { status: 200 });
+    });
+    await editSongPage(
+      env,
+      { authorName: "A", track: "T", trackLink: "", artist: "", artistLink: "", album: "",
+        albumLink: "", albumCoverUrl: "https://img/new.jpg", releaseDate: "", path: "p-1" } as any,
+      "lyrics",
+    );
+    expect(JSON.stringify(sent.content)).toContain("https://img/new.jpg");
+  });
+});
