@@ -42,6 +42,25 @@ const DEEZLOAD_ALBUM_QUIET_MS = 30000;
 const CONNECT_TIMEOUT_MS = 45000;
 const SIGNIN_TOTAL_TIMEOUT_MS = 180000;
 
+// ── /migrate history page ───────────────────────────────────────────────────
+
+// The message-shape reading lives in ./historyNormalize: it is pure and
+// unit-tested there, because this file pulls in `cloudflare:sockets` and
+// cannot be imported by a test. Re-exported here so the client surface is
+// unchanged.
+export {
+  type HistoryMessage,
+  type PosterIdentity,
+  isOwnPoster,
+  extractHistoryButtons,
+  normalizeHistoryMessage,
+} from "./historyNormalize";
+
+import { floodWaitSeconds, unreadableReason } from "./scanErrors";
+import { normalizeHistoryMessage, type HistoryMessage } from "./historyNormalize";
+
+export { floodWaitSeconds, unreadableReason };
+
 export type SessionLoader = () => Promise<string | undefined>;
 export type SessionSaver = (serialized: string) => Promise<void>;
 
@@ -809,6 +828,159 @@ export class BridgeJobs {
     } catch (error) {
       warn("bridge: album view dump failed", error);
       return "recent-message dump failed";
+    }
+  }
+
+  /**
+   * Read ONE page of a channel's history for a /migrate run (FR-009).
+   *
+   * Deliberately a single page per call: BridgeDO's queue is strictly serial
+   * with a 240s watchdog (AUTOFETCH_JOB_TIMEOUT_MS) and existing jobs depend on
+   * that serialization, so a whole-channel scan as one job would starve every
+   * music download. The run fetches the next page only when the current one is
+   * exhausted, which also makes the admin's own answering pace the rate limiter
+   * against FLOOD_WAIT (FR-009b).
+   *
+   * `offsetId` is 0 for the newest page; pass the last message id seen to walk
+   * further back. Returns `nextOffsetId: null` at the end of history.
+   *
+   * On FLOOD_WAIT this resolves rather than throwing (BridgeJobs collectors
+   * never reject) and reports `floodWaitSeconds`, so the caller can pace and
+   * retry instead of failing the job — there is no FloodWaitError handling
+   * anywhere else in this repo, because nothing else does bulk reads.
+   */
+  async fetchHistoryPage(
+    channelId: string,
+    offsetId = 0,
+    limit = 50,
+  ): Promise<{
+    messages: HistoryMessage[];
+    nextOffsetId: number | null;
+    floodWaitSeconds?: number;
+    // Set when the channel cannot be read at all, with a message meant for a
+    // human. Distinguished from a flood wait, which is retryable.
+    unreachable?: string;
+  }> {
+    const client = await this.bridge.get();
+    const channel = await this.resolveChannelEntity(client, channelId);
+    if (!channel) {
+      return {
+        messages: [],
+        nextOffsetId: offsetId || null,
+        unreachable:
+          "the signed-in Telegram account can't see this channel — it needs to be added to it",
+      };
+    }
+
+    try {
+      const messages = await client.getMessages(channel, {
+        limit,
+        offsetId,
+      });
+
+      const list = Array.isArray(messages) ? messages : [messages];
+      const normalized = list
+        .filter((m) => m && typeof (m as any).id === "number")
+        .map((m) => normalizeHistoryMessage(m as any));
+
+      // The oldest id in this page is where the next page continues. A short
+      // page (fewer than `limit`) means history is exhausted.
+      const oldest = normalized.reduce(
+        (min, m) => (m.messageId < min ? m.messageId : min),
+        Number.MAX_SAFE_INTEGER,
+      );
+      const exhausted = normalized.length < limit;
+
+      return {
+        messages: normalized,
+        nextOffsetId: exhausted || !normalized.length ? null : oldest,
+      };
+    } catch (error) {
+      const seconds = floodWaitSeconds(error);
+      if (seconds !== null) {
+        return { messages: [], nextOffsetId: offsetId || null, floodWaitSeconds: seconds };
+      }
+      const why = unreadableReason(error);
+      if (why) {
+        return { messages: [], nextOffsetId: offsetId || null, unreachable: why };
+      }
+      // Anything else is a real failure — surface it to runJob's catch, which
+      // reports to the owner rather than hanging.
+      throw error;
+    }
+  }
+
+  /**
+   * Resolve a bare "-100…" channel id to something getMessages can read.
+   *
+   * A numeric id carries NO access_hash, and StringSession persists none, so a
+   * cold DO cannot resolve it directly: getInputEntity's only path for a
+   * PeerChannel is `channels.getChannels` with `accessHash: 0`, which works
+   * for bots but is rejected for a user account — and that rejection is
+   * swallowed inside teleproto, resurfacing as a bare "Could not find the
+   * input entity" with no hint about why.
+   *
+   * The access_hash only exists in the account's dialog list, so fetching
+   * dialogs is what actually warms the cache. Tried before giving up.
+   */
+  private async resolveChannelEntity(client: any, channelId: string): Promise<any | null> {
+    try {
+      return await client.getEntity(channelId);
+    } catch {
+      // cold cache — fall through
+    }
+
+    try {
+      log("bridge: priming entity cache via dialogs for", channelId);
+      await client.getDialogs({ limit: 300 });
+    } catch (error) {
+      warn("bridge: failed to list dialogs while resolving channel", error);
+      return null;
+    }
+
+    try {
+      return await client.getEntity(channelId);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Attach an inline keyboard to a channel post, in place (FR-020).
+   *
+   * Teleproto's editMessage with `buttons` is the MTProto equivalent of
+   * editMessageReplyMarkup: it carries markup only, never media or caption, so
+   * the audio, the caption and the post's position cannot be altered. There is
+   * deliberately no "re-send with caption" fallback here either (FR-026).
+   *
+   * Returns false on failure so the caller can record the candidate as failed
+   * (FR-029) instead of retrying with a destructive method.
+   */
+  async editChannelMessage(
+    channelId: string,
+    messageId: number,
+    rows: Array<Array<{ text: string; url?: string }>>,
+  ): Promise<boolean> {
+    try {
+      const client = await this.bridge.get();
+      const channel = await this.resolveChannelEntity(client, channelId);
+      if (!channel) {
+        warn("bridge: cannot resolve channel to edit", { channelId, messageId });
+        return false;
+      }
+      await (client as any).editMessage(channel, {
+        message: messageId,
+        buttons: rows.map((row) =>
+          row.map((b) => ({ text: b.text, url: b.url ?? "", onClick: undefined })),
+        ),
+      });
+      return true;
+    } catch (error) {
+      warn("bridge: failed to attach button to channel post", {
+        channelId, messageId,
+        reason: String((error as any)?.message ?? error).slice(0, 200),
+      });
+      return false;
     }
   }
 }

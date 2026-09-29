@@ -86,6 +86,55 @@ export interface DbBrowserState extends BaseFlowData {
   fromCard?: boolean;
 }
 
+// /migrate walk state. Deliberately NOT a SessionMode, for the same reason
+// DbBrowserState isn't: handleNewFieldValue hard-transitions to IDLE when a
+// field edit completes (handlers/callbacks/edit.ts), which would destroy an
+// active migration mode and strand the run mid-question. A non-mode bag
+// survives every edit exit untouched, and needs no VALID_TRANSITIONS entry or
+// cleanup hook. Persisted sessions predate this field — always reach it
+// through migrationOf() (session/flows.ts).
+//
+// Only the CURRENT cursor lives here. The authoritative record of what was
+// found and decided is the scan_queue table; these counters exist so the
+// summary can render without re-querying.
+export interface MigrationState {
+  // idle → pick_channel → pending ⇄ editing (Edit returns to the SAME
+  // candidate) ⇄ researching (waiting for a Deezer query, also returns to the
+  // SAME candidate) → pending → done
+  phase: "idle" | "pick_channel" | "pending" | "editing" | "researching" | "done";
+  // The channel being walked, plus the rows rendered for the picker.
+  channelId?: string;
+  channelIdList?: string[];
+  // Where the next history page resumes, as reported by the bridge's lyq:scan
+  // (0 for the first page). Null/undefined once history is exhausted — that is
+  // the signal that a run with no pending rows has really finished rather than
+  // simply not been filled in yet (FR-009b, FR-032).
+  nextOffsetId?: number;
+  scanExhausted?: boolean;
+  // The "Reading that channel's history…" notice, so it can be cleared once
+  // the scan answers — otherwise it sits there looking stuck forever.
+  readingMessageId?: number;
+  // scan_queue.id of the candidate currently on screen. Moves only on
+  // Yes / No / a failure — never on Edit.
+  cursorId?: number;
+  added: number;
+  declined: number;
+  edited: number;
+  failed: number;
+  // FR-024a/b: while an Edit opened from a confirmation is live, the edit
+  // keyboard carries an extra row that returns to that confirmation.
+  returnArmed?: boolean;
+  // The confirmation message, so Edit/Research can delete it when they
+  // re-render instead.
+  cardMessageId?: number;
+  // Deezer results offered by Research, kept so a late tap can be matched back
+  // to this candidate rather than answered against whatever comes next.
+  researchResults?: Array<{ id: number; title: string; artist: string; duration: number }>;
+  // Set while Research is awaiting a text query, so processTextMessage knows a
+  // message belongs to the run rather than to an open edit field.
+  researchPromptId?: number;
+}
+
 export interface TelegraphFlowData extends BaseFlowData {
   url?: string;
   path?: string;
@@ -118,6 +167,7 @@ export interface SessionData {
   lyrics: LyricsFlowData;
   telegraph: TelegraphFlowData;
   dbBrowser: DbBrowserState;
+  migration: MigrationState;
 }
 
 export interface SessionSnapshot {

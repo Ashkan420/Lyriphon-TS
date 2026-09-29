@@ -341,6 +341,12 @@ describe("TrackProgressReporter", () => {
         calls.push({ method: "deleteMessage", args });
         return Promise.resolve(true);
       },
+      // The only method the /migrate run uses to touch a channel post: adds or
+      // replaces the inline keyboard and nothing else — no media, no caption.
+      editMessageReplyMarkup: (...args: unknown[]) => {
+        calls.push({ method: "editMessageReplyMarkup", args });
+        return Promise.resolve(true);
+      },
     };
     return { api, calls };
   }

@@ -18,6 +18,9 @@ import { dbCommand, handleDbViewCallback, handleDbTextInput } from "./handlers/d
 import { handleSettingsCommand } from "./handlers/settings";
 import { albumCommand } from "./handlers/album";
 import { editCommandHandler } from "./handlers/editCommand";
+import { migrateCommandHandler } from "./handlers/migrateCommand";
+import { cancelResearchFlow } from "./handlers/callbacks/migrate";
+import { migrationOf } from "./session/flows";
 
 export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
   const bot = new Bot<Context>(env.BOT_TOKEN);
@@ -55,6 +58,13 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     await editCommandHandler(ctx, session, env);
   });
 
+  // /migrate — owner-gated channel button backfill. The gate lives inside the
+  // handler so the command can refuse in groups and when BOT_OWNER_ID is unset.
+  bot.command("migrate", async (ctx) => {
+    const session = getSession(sessionDo.sessionData);
+    await migrateCommandHandler(ctx, session, env);
+  });
+
   bot.command("done", async (ctx) => {
     const session = getSession(sessionDo.sessionData);
     if (!inMode(session, SessionMode.EDIT_LYRICS)) {
@@ -70,6 +80,15 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     const session = getSession(sessionDo.sessionData);
     const chatId = ctx.chat?.id;
     if (!chatId) return;
+
+    // A /migrate Research query in flight owns the next message, so /cancel
+    // means "leave the search" — not "cancel an edit" (there is none open).
+    if (migrationOf(session).phase === "researching") {
+      await safeDelete(ctx.api, chatId, ctx.message!.message_id);
+      await cancelResearchFlow(ctx, session, env);
+      await ctx.reply("❌ Search cancelled");
+      return;
+    }
 
     const db = dbBrowserOf(session);
     if (db.collectingLyrics || db.awaitingQuery) {
@@ -283,6 +302,16 @@ export function createBot(env: Env, sessionDo: SessionDO): Bot<Context> {
     // Owner DB browser takes priority: it must never leak into the edit flows
     // or a /song search. Returns true only when it consumed the input.
     if (await handleDbTextInput(ctx, session, env)) {
+      return;
+    }
+
+    // A /migrate Research query in flight owns this message. It MUST be checked
+    // before the edit-mode branch and before the /song fallthrough below —
+    // otherwise the query is treated as a normal search, which runs the whole
+    // pipeline (Deezer → track → audio → "send to which channel?") and leaves
+    // the run stranded behind it.
+    if (migrationOf(session).phase === "researching") {
+      await processTextMessage(ctx, session, env);
       return;
     }
 

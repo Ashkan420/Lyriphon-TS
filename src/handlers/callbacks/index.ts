@@ -4,6 +4,7 @@ import { safeAnswer } from "../../utils/telegram";
 import { combineLyricsWithTranslation, combineLyricsFromJson, parseTranslationJson } from "../../services/translation/combine";
 import { warn } from "../../utils/logger";
 import { SessionData } from "../../session/types";
+import { migrationOf } from "../../session/flows";
 import { Env } from "../../env";
 import { isBotOwner } from "../admin";
 
@@ -95,10 +96,24 @@ export function adminToolsOpts(trackId: unknown, isOwner: boolean): { adminTools
   return { adminTools: isOwner && id !== undefined, trackId: id };
 }
 
+export type EditMenuButton = {
+  text: string;
+  callback_data: string;
+  style?: "success" | "danger" | "primary";
+};
+
 export function buildEditMenu(
   expanded = false,
-  opts?: { adminTools?: boolean; trackId?: number },
-): Array<Array<{ text: string; callback_data: string; style?: "success" | "danger" | "primary" }>> {
+  opts?: {
+    adminTools?: boolean;
+    trackId?: number;
+    // Rows appended UNDER everything else, so a caller can hang a control off
+    // the keyboard without rewriting it. Purely additive: every existing call
+    // site passes an opts object without this key, so `...[]` is a no-op and
+    // no call site changes.
+    extraRows?: EditMenuButton[][];
+  },
+): Array<EditMenuButton[]> {
   const refreshButton = { text: "🔄 Refresh AI Summary", callback_data: "refresh_summary" };
   // Owner-only: opens the DB record tools for this track in a separate
   // message (the card itself stays untouched).
@@ -106,6 +121,7 @@ export function buildEditMenu(
     opts?.adminTools && typeof opts.trackId === "number"
       ? [[{ text: "🛠 Cache tools", callback_data: `dbview_card_${opts.trackId}` }]]
       : [];
+  const extraRows = opts?.extraRows ?? [];
 
   if (!expanded) {
     return [
@@ -115,6 +131,7 @@ export function buildEditMenu(
         refreshButton,
       ],
       ...adminToolsRow,
+      ...extraRows,
     ];
   }
 
@@ -143,6 +160,7 @@ export function buildEditMenu(
       refreshButton,
     ],
     ...adminToolsRow,
+    ...extraRows,
   ];
 }
 
@@ -150,9 +168,15 @@ export async function handleExpandEditMenu(ctx: Context, session?: SessionData, 
   await safeAnswer(ctx);
   const trackId = (session?.telegraph.data as { trackId?: number } | undefined)?.trackId;
   const isOwner = env ? isBotOwner(ctx, env) : false;
+  // FR-024a: while a /migrate edit session is open, the return control rides
+  // under every other row. It is only ever armed by the migration path, so
+  // every ordinary edit menu is unchanged.
+  const extraRows = session && migrationOf(session).returnArmed
+    ? [[{ text: "↩️ Back to this post", callback_data: "mig_return" }]]
+    : undefined;
   try {
     await ctx.editMessageReplyMarkup({
-      reply_markup: { inline_keyboard: buildEditMenu(true, adminToolsOpts(trackId, isOwner)) },
+      reply_markup: { inline_keyboard: buildEditMenu(true, { ...adminToolsOpts(trackId, isOwner), extraRows }) },
     });
   } catch {}
 }

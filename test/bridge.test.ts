@@ -14,6 +14,7 @@ vi.mock("grammy", async (importOriginal) => {
     sendAudio = (...args: any[]) => apiMethods.sendAudio(...args);
     editMessageMediaInline = (...args: any[]) => apiMethods.editMessageMediaInline?.(...args);
     editMessageTextInline = (...args: any[]) => apiMethods.editMessageTextInline?.(...args);
+    editMessageReplyMarkup = (...args: any[]) => apiMethods.editMessageReplyMarkup?.(...args);
     deleteMessage = (...args: any[]) => apiMethods.deleteMessage?.(...args);
   }
   return { ...actual, Api: MockApi };

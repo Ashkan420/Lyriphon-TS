@@ -44,6 +44,38 @@ describe("buildEditMenu", () => {
     const expanded = buildEditMenu(true);
     expect(expanded[expanded.length - 1].some((b) => b.callback_data === "refresh_summary")).toBe(true);
   });
+
+  // FR-024a — extraRows is the additive hook the /migrate return control uses.
+  describe("extraRows", () => {
+    const extra = [[{ text: "↩️ Back to this post", callback_data: "mig_return" }]];
+
+    it("appends the row UNDER everything else in both variants", () => {
+      for (const expanded of [false, true]) {
+        const menu = buildEditMenu(expanded, { extraRows: extra });
+        const last = menu[menu.length - 1];
+        expect(last[0].callback_data).toBe("mig_return");
+        // and it did not displace anything that was already there
+        expect(menu.some((row) => row.some((b) => b.callback_data === "refresh_summary"))).toBe(true);
+        expect(menu[0][0].callback_data).toBe(expanded ? "edit_field_lyrics" : "expand_edit_menu");
+      }
+    });
+
+    it("lands after the owner-only Cache tools row when both are present", () => {
+      const menu = buildEditMenu(true, { adminTools: true, trackId: 42, extraRows: extra });
+      expect(menu[menu.length - 2][0].callback_data).toBe("dbview_card_42");
+      expect(menu[menu.length - 1][0].callback_data).toBe("mig_return");
+    });
+
+    it("changes nothing for callers that do not pass it", () => {
+      // Every existing call site passes an opts object without extraRows.
+      expect(buildEditMenu(false)).toEqual(buildEditMenu(false, {}));
+      expect(buildEditMenu(true)).toEqual(buildEditMenu(true, { adminTools: false }));
+      expect(buildEditMenu(false).some((row) => row.some((b) => b.callback_data === "mig_return")))
+        .toBe(false);
+      expect(buildEditMenu(false)).toHaveLength(2);
+      expect(buildEditMenu(true)).toHaveLength(6);
+    });
+  });
 });
 
 describe("resetTranslationState", () => {
