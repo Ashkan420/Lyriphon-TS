@@ -58,6 +58,69 @@ export async function safeEditMessage(ctx: Context, text: string): Promise<void>
   } catch {}
 }
 
+// Add or replace the inline keyboard on a message that already exists.
+//
+// Its payload carries no media, no caption, no parse_mode and no entities — so
+// the audio, the caption text, its entities (the hidden Telegraph link, the
+// U+200E inside it) and the post's position are all preserved because the
+// request never mentions them. Do NOT fall back to editMessageMedia on failure:
+// that would re-supply the media, which is exactly what the feature forbids
+// (FR-025/026). A failed attach is logged here and the post is left alone.
+//
+// The caption IS changed on purpose (FR-027a) — but by safeEditCaption below,
+// as a separate call, so a caption problem can never cost the button.
+export async function safeEditMarkup(
+  api: any,
+  chatId: number,
+  messageId: number,
+  markup: InlineKeyboardMarkup,
+): Promise<boolean> {
+  try {
+    await api.editMessageReplyMarkup(chatId, messageId, { reply_markup: markup });
+    return true;
+  } catch (error) {
+    // Swallowed like safeEdit — but the reason must be visible. Returning a
+    // bare false leaves the caller with nothing to diagnose, which is exactly
+    // the situation when real posts start refusing the edit.
+    warn("safeEditMarkup failed", {
+      chatId,
+      messageId,
+      error: String((error as any)?.message ?? error).slice(0, 300),
+    });
+    return false;
+  }
+}
+
+// Replace the caption of a message that already exists, without touching the
+// media. Used by /migrate to put a post into the bot's normal caption form
+// (FR-027a) — a second call alongside safeEditMarkup, not a replacement for it.
+//
+// A caption that is already identical comes back as "message is not modified";
+// that is the desired outcome here, not a failure, so it is treated as success.
+export async function safeEditCaption(
+  api: any,
+  chatId: number,
+  messageId: number,
+  caption: string,
+): Promise<boolean> {
+  try {
+    await api.editMessageCaption(chatId, messageId, {
+      caption,
+      parse_mode: "MarkdownV2",
+    });
+    return true;
+  } catch (error) {
+    const message = String((error as any)?.message ?? error);
+    if (/not modified/i.test(message)) return true;
+    warn("safeEditCaption failed", {
+      chatId,
+      messageId,
+      error: message.slice(0, 300),
+    });
+    return false;
+  }
+}
+
 // Delete the lingering "Send to which channel?" prompt, if any.
 export async function clearSendChannelPrompt(
   api: Api<RawApi>,

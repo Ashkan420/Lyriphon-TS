@@ -1,5 +1,6 @@
 import { Context } from "grammy";
 import { SessionData } from "../../session/types";
+import { migrationOf } from "../../session/flows";
 import { SessionMode } from "../../session/types";
 import { Env } from "../../env";
 import { handleTrackSelectionCallback } from "./search";
@@ -12,6 +13,7 @@ import {
   handleNewFieldValue,
   handleApplyToD1,
 } from "./edit";
+import { handleMigrationCallback, handleResearchQuery } from "./migrate";
 import { handleExpandEditMenu } from "./index";
 import { handleTranslateCallback } from "./translate";
 import { handleRefreshSummaryCallback } from "./summary";
@@ -106,6 +108,14 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
     return;
   }
 
+  // /migrate: channel picker, confirmation Yes/No/Edit, and the Edit return
+  // control. Its prefix collides with nothing (checked repo-wide), and it sits
+  // with the edit family because it opens the same edit flow.
+  if (data.startsWith("mig_")) {
+    await handleMigrationCallback(ctx, session, env);
+    return;
+  }
+
   if (data.startsWith("send_channel_")) {
     await handleSendToChannelCallback(ctx, session, env);
     return;
@@ -143,6 +153,14 @@ export async function handleCallbackQuery(ctx: Context, session: SessionData, en
 }
 
 export async function processTextMessage(ctx: Context, session: SessionData, env: Env) {
+  // A /migrate Research query takes precedence over an open edit field: the
+  // run owns the message it is waiting for, and there is no edit field open
+  // while it is (phase is 'researching', not an edit mode).
+  if (migrationOf(session).phase === "researching") {
+    await handleResearchQuery(ctx, session);
+    return;
+  }
+
   if (!session.edit.field || !(session.mode === SessionMode.EDIT_FIELD || session.mode === SessionMode.EDIT_LYRICS)) {
     return;
   }

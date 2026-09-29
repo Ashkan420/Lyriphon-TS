@@ -78,16 +78,37 @@ export type BridgeMessage =
   | { kind: "file"; token: string }
   | { kind: "fail"; token: string }
   | { kind: "albumfile"; token: string; idx: number }
-  | { kind: "albumdone"; token: string; count: number };
+  | { kind: "albumdone"; token: string; count: number }
+  | { kind: "scan"; user: string; channel: string; status: "done" | "partial" | "failed"; count: number; offset: number; reason?: string };
 
 // Matches the control messages the Telethon script (or BridgeDO) sends back:
 //   lyq:file req=<token>             (caption on the audio/document)
 //   lyq:fail req=<token> [reason]
 //   lyq:albumfile req=<token> idx=<n>   (album-stream arrival, nth file)
 //   lyq:albumdone req=<token> count=<k> (album stream finished)
+//   lyq:scan user=<id> channel=<id> status=<...> count=<k> offset=<n> [reason=...]
+//     — a /migrate history page has been classified and written to scan_queue.
+//       Counts only: the messages themselves live in D1, never in this DM
+//       (a real candidate list would blow the 4096-char limit). `offset` is
+//       where the next page resumes, so a throttled page can be retried
+//       without re-reading everything before it.
 // Extra trailing text (the fail reason) is tolerated.
 export function parseBridgeMessage(text: string | undefined | null): BridgeMessage | null {
   if (!text) return null;
+  const scan = text.match(
+    /^lyq:scan user=(\S+) channel=(\S+) status=(done|partial|failed) count=(\d+) offset=(\d+)(?:\s+reason=(.*))?\s*$/,
+  );
+  if (scan) {
+    return {
+      kind: "scan",
+      user: scan[1],
+      channel: scan[2],
+      status: scan[3] as "done" | "partial" | "failed",
+      count: Number(scan[4]),
+      offset: Number(scan[5]),
+      reason: scan[6]?.trim() || undefined,
+    };
+  }
   const albumFile = text.match(/^lyq:albumfile req=(\S+) idx=(\d+)(?:\s|$)/);
   if (albumFile) {
     return { kind: "albumfile", token: albumFile[1], idx: Number(albumFile[2]) };
@@ -174,6 +195,16 @@ export async function handleBridgeUpdate(env: Env, update: any): Promise<void> {
       return;
     }
 
+    // /migrate history page classified. Bridge chat traffic is intercepted
+    // BEFORE the per-user SessionDO routing (src/index.ts), so the run's
+    // session is unreachable from here — the signal is delivered as a button
+    // in the admin's own chat, and pressing it is a normal callback that does
+    // reach their session.
+    if (parsed?.kind === "scan") {
+      await notifyScanReady(env, parsed);
+      return;
+    }
+
     if (parsed || audio) {
       log("bridge: unhandled message shape", JSON.stringify({
         hasAudio: Boolean(audio),
@@ -183,6 +214,53 @@ export async function handleBridgeUpdate(env: Env, update: any): Promise<void> {
     }
   } catch (error) {
     warn("bridge: update handling failed", error);
+  }
+}
+
+// A /migrate history page is ready: tell the admin and hand them a button that
+// resumes the run. The run itself decides what "resume" means — review the
+// pending candidates, fetch the next page, or report that there is nothing to
+// do — so this message never has to interpret scan state.
+async function notifyScanReady(
+  env: Env,
+  parsed: { user: string; channel: string; status: string; count: number; offset?: number; reason?: string },
+): Promise<void> {
+  try {
+    const chatId = Number(parsed.user);
+    if (!chatId) return;
+
+    const throttled = parsed.status === "failed" && parsed.reason?.startsWith("FLOOD_WAIT");
+    let text: string;
+    if (throttled) {
+      const seconds = parsed.reason?.replace("FLOOD_WAIT_", "") ?? "";
+      text = `⏳ Telegram asked the scan to slow down for ${seconds}s.\n\nNothing was lost — tap below when you're ready to continue.`;
+    } else if (parsed.status === "failed") {
+      // Plain text, no parse_mode: the reason carries a raw Telegram error, and
+      // any stray "*" or "_" in it would make Markdown reject the whole message
+      // — which is how a failure ends up reported as no message at all.
+      text = `❌ The channel scan didn't finish.\n\n${parsed.reason ?? "Unknown reason"}\n\nTap below to try again.`;
+    } else if (parsed.count > 0) {
+      text = `✅ Found ${parsed.count} post${parsed.count === 1 ? "" : "s"} to review.`;
+    } else {
+      text = `Checked a stretch of that channel — nothing new to review yet.`;
+    }
+
+    const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
+
+    // The resume point rides ON the button. This handler is session-free —
+    // bridge chat is intercepted before the per-user SessionDO — so there is
+    // nowhere else to write it. Without it the run has no idea which page of
+    // history it is on and silently re-scans the newest one forever.
+    const offset = Math.max(0, Math.floor(parsed.offset ?? 0));
+    const resume = `mig_resume_${parsed.status}_${offset}`;
+
+    await api.sendMessage(chatId, text, {
+      reply_markup: {
+        inline_keyboard: [[{ text: "▶️ Continue", callback_data: resume }]],
+      },
+    });
+  } catch (error) {
+    warn("bridge: failed to notify admin of scan progress", error);
   }
 }
 

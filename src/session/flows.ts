@@ -1,4 +1,4 @@
-import { AudioFlowData, DbBrowserState, EditFlowData, LyricsFlowData, SearchFlowData, SessionData, SessionMode, TelegraphFlowData } from "./types";
+import { AudioFlowData, DbBrowserState, EditFlowData, LyricsFlowData, MigrationState, SearchFlowData, SessionData, SessionMode, TelegraphFlowData } from "./types";
 
 export function createAudioFlow(): AudioFlowData {
   return {
@@ -78,6 +78,57 @@ export function resetDbBrowserInput(db: DbBrowserState) {
   db.customQuery = undefined;
 }
 
+export function createMigrationState(): MigrationState {
+  return {
+    phase: "idle",
+    channelId: undefined,
+    channelIdList: undefined,
+    nextOffsetId: undefined,
+    scanExhausted: undefined,
+    readingMessageId: undefined,
+    cursorId: undefined,
+    added: 0,
+    declined: 0,
+    edited: 0,
+    failed: 0,
+    returnArmed: false,
+    cardMessageId: undefined,
+    researchResults: undefined,
+    researchPromptId: undefined,
+  };
+}
+
+// Persisted sessions predate migration — lazily materialize it so handlers
+// never touch undefined. This is the ONLY sanctioned access path, matching
+// dbBrowserOf().
+export function migrationOf(session: SessionData): MigrationState {
+  if (!session.migration) {
+    session.migration = createMigrationState();
+  }
+  return session.migration;
+}
+
+// Clear the run back to idle. Called when a run finishes, is cancelled, or is
+// abandoned — counters included, since scan_queue.outcome is the authoritative
+// record and these only mirror it for the summary.
+export function resetMigrationInput(m: MigrationState) {
+  m.phase = "idle";
+  m.channelId = undefined;
+  m.channelIdList = undefined;
+  m.nextOffsetId = undefined;
+  m.scanExhausted = undefined;
+  m.readingMessageId = undefined;
+  m.cursorId = undefined;
+  m.added = 0;
+  m.declined = 0;
+  m.edited = 0;
+  m.failed = 0;
+  m.returnArmed = false;
+  m.cardMessageId = undefined;
+  m.researchResults = undefined;
+  m.researchPromptId = undefined;
+}
+
 export function createTelegraphFlow(): TelegraphFlowData {
   return {
     locked: false,
@@ -108,6 +159,7 @@ export function createSessionData(): SessionData {
     lyrics: createLyricsFlow(),
     telegraph: createTelegraphFlow(),
     dbBrowser: createDbBrowserState(),
+    migration: createMigrationState(),
   };
 }
 
@@ -120,6 +172,7 @@ export function resetSessionData(session: SessionData) {
   session.lyrics = createLyricsFlow();
   session.telegraph = createTelegraphFlow();
   session.dbBrowser = createDbBrowserState();
+  session.migration = createMigrationState();
 }
 
 export function clearAudioState(session: SessionData) {
@@ -192,5 +245,6 @@ export function snapshotSession(session: SessionData) {
     lyrics: { ...session.lyrics },
     telegraph: { ...session.telegraph },
     dbBrowser: { ...session.dbBrowser },
+    migration: { ...session.migration },
   };
 }

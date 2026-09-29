@@ -24,8 +24,29 @@ import {
   BridgeClient,
   BridgeJobs,
   AuthOutcome,
+  isAuthorized,
+  sendBridgeText,
 } from "./bridge/client";
 import { AUTOFETCH_JOB_TIMEOUT_MS, AUTOFETCH_MAX_QUEUE } from "./config";
+import { classifyScannedMessage } from "./handlers/migrate";
+import { countByStatus, insertScanCandidates, type ScanCandidateInput } from "./db/scanQueue";
+
+// One /migrate history page per job. A whole-channel scan as a single job would
+// hold the serial queue for its entire length and starve every music download;
+// a page is trivially inside the watchdog budget.
+const SCAN_PAGE_LIMIT = 50;
+
+// One line, no whitespace runs: the lyq:scan message is parsed as a single
+// line, and Telegram error text arrives with its own newlines and a long
+// indented "Please read https://docs…" block that would otherwise truncate the
+// reason down to its first word.
+function sanitizeReason(reason: string): string {
+  // \s+ already covers \r and \n — no separate newline pass needed.
+  return String(reason)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+}
 
 const DO_STORAGE_SESSION = "bridge:session";
 const DO_STORAGE_JOB = "bridge:currentJob";
@@ -42,6 +63,21 @@ type CurrentJob = {
   // track count). The collector finishes the moment this count arrives
   // instead of waiting out the quiet-period backstop.
   expectedCount?: number;
+  // Set = /migrate history-page job: read ONE page of a channel, classify it,
+  // write scan_queue rows, and report back with lyq:scan. Distinguished by
+  // `kind` rather than by an optional field being present, because the album
+  // branch already infers its type from `albumId !== undefined` and a third
+  // variant bolted onto that inference would be fragile.
+  kind?: "scan";
+  scan?: {
+    userId: string;
+    channelId: string;
+    offsetId: number;
+    limit: number;
+    // How many times FLOOD_WAIT has slowed this page. Bounded so a throttled
+    // channel cannot spin inside one job's watchdog budget.
+    attempts: number;
+  };
   startedAt: number;
 };
 
@@ -79,6 +115,12 @@ export class BridgeDO {
     try {
       if (request.method === "POST" && url.pathname === "/enqueue") {
         return await this.handleEnqueue(request);
+      }
+      if (request.method === "POST" && url.pathname === "/scan") {
+        return await this.handleScan(request, false);
+      }
+      if (request.method === "POST" && url.pathname === "/scanPage") {
+        return await this.handleScan(request, true);
       }
       if (request.method === "POST" && url.pathname === "/auth/start") {
         return await this.handleAuthStart(request);
@@ -277,6 +319,72 @@ export class BridgeDO {
     return Response.json({ ok: true, position });
   }
 
+  // POST /scan (from the beginning) and POST /scanPage (continues at
+  // body.offsetId) — contracts/bridge-scan.md §1. Same envelope as /enqueue.
+  //
+  // `useBodyOffset` is false for /scan so a fresh run always restarts at the
+  // newest message; /scanPage passes the resume point the previous page
+  // reported back.
+  private async handleScan(request: Request, useBodyOffset: boolean): Promise<Response> {
+    const body = (await request.json().catch(() => ({}))) as {
+      userId?: string;
+      channelId?: string;
+      offsetId?: number;
+      limit?: number;
+    };
+    const userId = typeof body.userId === "string" ? body.userId : "";
+    const channelId = typeof body.channelId === "string" ? body.channelId : "";
+    if (!userId || !channelId) {
+      return Response.json({ ok: false, error: "missing fields" });
+    }
+
+    // Fail closed. Without a signed-in account the job would throw deep inside
+    // MTProto with an opaque error; isAuthorized() already existed and was
+    // never called anywhere until now.
+    try {
+      if (!(await isAuthorized(this.bridgeClient))) {
+        return Response.json({ ok: false, error: "unauthorized" });
+      }
+    } catch (error) {
+      warn("BridgeDO: authorization check failed", error);
+      return Response.json({ ok: false, error: "unauthorized" });
+    }
+
+    const queue = await this.loadQueue();
+    if (queue.length >= AUTOFETCH_MAX_QUEUE) {
+      return Response.json({ ok: false, error: "queue_full" });
+    }
+
+    const limit = typeof body.limit === "number" && body.limit > 0
+      ? Math.min(Math.floor(body.limit), SCAN_PAGE_LIMIT)
+      : SCAN_PAGE_LIMIT;
+
+    const job: CurrentJob = {
+      // No D1 row backs this token — scan failures report via lyq:scan, not
+      // failRequestDirectly() (which is entirely audio_requests-shaped).
+      token: `scan:${channelId}:${Date.now()}`,
+      trackId: 0,
+      chatId: 0,
+      kind: "scan",
+      scan: {
+        userId,
+        channelId,
+        offsetId: useBodyOffset && typeof body.offsetId === "number" && body.offsetId > 0
+          ? body.offsetId
+          : 0,
+        limit,
+        attempts: 0,
+      },
+      startedAt: Date.now(),
+    };
+    queue.push(job);
+    await this.persistQueue();
+
+    log("BridgeDO: scan queued", JSON.stringify({ channelId, offsetId: job.scan?.offsetId }));
+    this.state.waitUntil(this.pump());
+    return Response.json({ ok: true });
+  }
+
   // Start the next queued job if nothing is running. Serial execution is
   // what keeps deezload's file↔token pairing correct.
   private async pump(): Promise<void> {
@@ -295,6 +403,12 @@ export class BridgeDO {
 
   private async runJob(job: CurrentJob): Promise<void> {
     try {
+      if (job.kind === "scan") {
+        // Reports its own outcome through lyq:scan — there is no D1 row for
+        // failRequestDirectly() to mark.
+        await this.runScanJob(job);
+        return;
+      }
       const peer = await this.bridgePeer();
       if (job.albumId !== undefined) {
         // Album job: one deezertalbum command; failures are reported per
@@ -310,6 +424,10 @@ export class BridgeDO {
     } catch (error: any) {
       const reason = String(error?.message ?? error).slice(0, 200);
       warn("BridgeDO: job failed", JSON.stringify({ token: job.token, reason }));
+      if (job.kind === "scan") {
+        await this.reportScan(job, "failed", 0, reason.slice(0, 120));
+        return;
+      }
       // Fail the D1 row and notify the requester directly — no MTProto
       // round-trip (the bridge may be exactly what's broken).
       await this.failRequestDirectly(job.token, reason);
@@ -329,6 +447,126 @@ export class BridgeDO {
       await this.disarmWatchdog();
       // Serial pipeline: kick off the next queued job.
       this.state.waitUntil(this.pump());
+    }
+  }
+
+  // ── /migrate history page ──────────────────────────────────────────────────
+
+  // Read ONE page of channel history, classify every message, write the
+  // qualifying ones to scan_queue, and report back with lyq:scan (contracts §3).
+  //
+  // Nothing here sleeps or retries: a FLOOD_WAIT is reported instead, and the
+  // next page is only requested once the admin has answered the current one —
+  // the walk is paced by the admin, which is what FR-009b asks for. Rows are
+  // INSERT OR IGNORE on (channel_id, message_id), so a retried page cannot
+  // duplicate anything.
+  private async runScanJob(job: CurrentJob): Promise<void> {
+    const scan = job.scan;
+    if (!scan) throw new Error("scan job without payload");
+
+    const page = await this.jobs.fetchHistoryPage(
+      scan.channelId,
+      scan.offsetId,
+      scan.limit,
+    );
+
+    if (page.unreachable) {
+      log("BridgeDO: scan cannot read channel", JSON.stringify({
+        channelId: scan.channelId, reason: page.unreachable,
+      }));
+      await this.reportScan(job, "failed", 0, page.unreachable);
+      return;
+    }
+
+    if (page.floodWaitSeconds !== undefined) {
+      log("BridgeDO: scan slowed by FLOOD_WAIT", JSON.stringify({
+        channelId: scan.channelId,
+        seconds: page.floodWaitSeconds,
+      }));
+      await this.reportScan(job, "failed", 0, `FLOOD_WAIT_${page.floodWaitSeconds}`);
+      return;
+    }
+
+    const candidates: ScanCandidateInput[] = [];
+    let ignored = 0;
+    for (const message of page.messages) {
+      const verdict = classifyScannedMessage(message);
+      if (verdict.kind === "ignore") {
+        // FR-011 / FR-012: another author's post, an album, a photo, a video
+        // or plain text produces NO row — not even a skipped one.
+        ignored += 1;
+        continue;
+      }
+      candidates.push({
+        channel_id: scan.channelId,
+        user_id: scan.userId,
+        message_id: message.messageId,
+        has_lyrics_button: verdict.hasLyricsButton,
+        existing_url: verdict.existingUrl,
+        existing_markup: verdict.existingMarkup,
+        title: verdict.title,
+        artist: verdict.artist,
+        file_name: verdict.fileName,
+      });
+    }
+
+    await insertScanCandidates(this.env.DB, candidates);
+
+    // Report what is actually LEFT to review, not what this page wrote.
+    // `candidates` counts rows attempted, and INSERT OR IGNORE means most were
+    // already present on a re-scan — which is why a re-run kept claiming the
+    // same "N posts found" after posts had already been handled.
+    const { pending } = await countByStatus(
+      this.env.DB, scan.userId, scan.channelId,
+    ).catch(() => ({ pending: candidates.length, handled: 0, failed: 0 }));
+
+    // A short page means history is exhausted. `nextOffsetId` is null at the
+    // end of history, so offset resumes from where this page stopped.
+    const status: "done" | "partial" = page.nextOffsetId === null ? "done" : "partial";
+    const offset = page.nextOffsetId ?? 0;
+
+    log("BridgeDO: scan page done", JSON.stringify({
+      channelId: scan.channelId,
+      scanned: page.messages.length,
+      recorded: candidates.length,
+      pending,
+      ignored,
+      status,
+    }));
+
+    await this.reportScan(job, status, pending, undefined, offset);
+  }
+
+  // The one-way reply: a few bytes into the bridge DM. Counts and a resume
+  // point only — the messages themselves stay in D1.
+  private async reportScan(
+    job: CurrentJob,
+    status: "done" | "partial" | "failed",
+    count: number,
+    reason?: string,
+    offset = 0,
+  ): Promise<void> {
+    const scan = job.scan;
+    if (!scan) return;
+
+    const text =
+      `lyq:scan user=${scan.userId} channel=${scan.channelId}` +
+      ` status=${status} count=${count} offset=${offset}` +
+      // Collapsed to one line: the receiver parses this as a single line and
+      // raw error text arrives with newlines of its own.
+      (reason ? ` reason=${sanitizeReason(reason)}` : "");
+
+    try {
+      // Sent from the ACCOUNT over MTProto, not by the bot over the Bot API.
+      //
+      // The whole bridge protocol depends on that direction: a message the bot
+      // sends generates no update for the bot, so `handleBridgeUpdate` never
+      // runs and the result is delivered to nobody. Every other `lyq:` tag
+      // (`lyq:file`, `lyq:albumdone`, `lyq:fail`) is written the same way —
+      // account → bot — precisely so the webhook sees it.
+      await sendBridgeText(this.bridgeClient, await this.bridgePeer(), text);
+    } catch (error) {
+      warn("BridgeDO: failed to report scan", error);
     }
   }
 
