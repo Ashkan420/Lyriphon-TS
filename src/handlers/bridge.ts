@@ -223,7 +223,7 @@ export async function handleBridgeUpdate(env: Env, update: any): Promise<void> {
 // do — so this message never has to interpret scan state.
 async function notifyScanReady(
   env: Env,
-  parsed: { user: string; channel: string; status: string; count: number; reason?: string },
+  parsed: { user: string; channel: string; status: string; count: number; offset?: number; reason?: string },
 ): Promise<void> {
   try {
     const chatId = Number(parsed.user);
@@ -246,9 +246,17 @@ async function notifyScanReady(
     }
 
     const api = new Api(env.BOT_TOKEN) as Api<RawApi>;
+
+    // The resume point rides ON the button. This handler is session-free —
+    // bridge chat is intercepted before the per-user SessionDO — so there is
+    // nowhere else to write it. Without it the run has no idea which page of
+    // history it is on and silently re-scans the newest one forever.
+    const offset = Math.max(0, Math.floor(parsed.offset ?? 0));
+    const resume = `mig_resume_${parsed.status}_${offset}`;
+
     await api.sendMessage(chatId, text, {
       reply_markup: {
-        inline_keyboard: [[{ text: "▶️ Continue", callback_data: "mig_resume" }]],
+        inline_keyboard: [[{ text: "▶️ Continue", callback_data: resume }]],
       },
     });
   } catch (error) {

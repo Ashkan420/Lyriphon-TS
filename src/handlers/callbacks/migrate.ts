@@ -397,10 +397,16 @@ export async function handleMigrationCallback(
     return;
   }
 
+  // Continue carries the resume point (mig_resume_<status>_<offset>), so it is
+  // matched on a prefix. An exact `case "resume"` never fires for a real
+  // button — the offset then never reaches the session and every Continue
+  // re-scans the newest page instead of walking into older history.
+  if (action === "resume" || /^resume_(?:done|partial|failed)_\d+$/.test(action)) {
+    await onResume(ctx, session, env);
+    return;
+  }
+
   switch (action) {
-    case "resume":
-      await onResume(ctx, session, env);
-      return;
     case "return":
       await onReturn(ctx, session, env);
       return;
@@ -470,6 +476,28 @@ async function onResume(ctx: Context, session: SessionData, env: Env): Promise<v
   if (migration.phase === "idle" || !migration.channelId) {
     await safeAnswer(ctx, "❌ This run has ended.");
     return;
+  }
+
+  // Where the last page ended. The scan result arrives session-free, so the
+  // resume point is carried on the button instead. Reading it is what lets the
+  // walk continue INTO older history rather than re-scanning page one — and
+  // what tells it to stop when history is exhausted.
+  //
+  // A plain mig_resume (the /migrate busy dialog) carries neither value and
+  // simply keeps whatever the session already has.
+  const resume = /mig_resume_(done|partial|failed)_(\d+)/.exec(
+    ctx.callbackQuery?.data ?? "",
+  );
+  if (resume) {
+    const [, status, offset] = resume;
+    if (status === "done") {
+      migration.scanExhausted = true;
+      migration.nextOffsetId = undefined;
+    } else if (status === "partial") {
+      migration.scanExhausted = false;
+      migration.nextOffsetId = Number(offset) || 0;
+    }
+    // 'failed' leaves both as they were so a retry starts from the same place.
   }
 
   // Clear the "Reading…" notice now that an answer arrived — leaving it is

@@ -1349,3 +1349,86 @@ describe("research claims text only while it owns the message", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Resuming into OLDER history. The scan result is session-free, so the resume
+// point rides on the Continue button; never reading it makes every Continue
+// re-scan the newest page — which is what "nothing new to review yet" x10 was.
+// ---------------------------------------------------------------------------
+
+describe("the walk advances into older history", () => {
+  // A run that has just drained its queue: no pending rows, so advance() asks
+  // for the next page instead of rendering a confirmation.
+  function setup(offsetId: number, exhausted: boolean) {
+    const db = fakeScanDb();
+    const fetches: any[] = [];
+    const session = createSessionData();
+    const m = migrationOf(session);
+    m.phase = "pick_channel";
+    m.channelId = "-1001";
+    m.cursorId = undefined;
+    m.nextOffsetId = offsetId;
+    m.scanExhausted = exhausted;
+
+    const env: any = {
+      DB: db,
+      BOT_OWNER_ID: "42",
+      BRIDGE_DO: {
+        idFromName: () => "bridge",
+        get: () => ({
+          fetch: async (url: string, init?: any) => {
+            fetches.push({ url, body: init?.body ? JSON.parse(init.body) : null });
+            return { json: async () => ({ ok: true }) };
+          },
+        }),
+      },
+    };
+    return { db, fetches, session, m, env };
+  }
+
+  it("a partial resume makes the next page start where the last one ended", async () => {
+    const { fetches, session, m, env } = setup(0, false);
+
+    await handleMigrationCallback(makeCtx("mig_resume_partial_88442").ctx, session, env);
+
+    expect(m.nextOffsetId).toBe(88442);
+    expect(m.scanExhausted).toBe(false);
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0].url).toContain("/scanPage");
+    expect(fetches[0].body.offsetId).toBe(88442);
+    // The whole bug: it must NOT ask for the newest page again.
+    expect(fetches[0].body.offsetId).not.toBe(0);
+  });
+
+  it("a done resume stops instead of asking for another page", async () => {
+    const { fetches, session, m, env } = setup(0, false);
+    const ctx = makeCtx("mig_resume_done_0").ctx;
+
+    await handleMigrationCallback(ctx, session, env);
+
+    expect(fetches).toHaveLength(0);           // history exhausted — no more pages
+    expect(m.phase).toBe("idle");              // the run closed itself
+    // and it reports rather than silently looping
+    expect(ctx.api.sendMessage).toHaveBeenCalled();
+    expect((ctx.api.sendMessage as any).mock.calls[0][1]).toContain("Done");
+  });
+
+  it("a plain mig_resume keeps the position it already has", async () => {
+    const { fetches, session, m, env } = setup(88442, false);
+
+    await handleMigrationCallback(makeCtx("mig_resume").ctx, session, env);
+
+    expect(m.nextOffsetId).toBe(88442);
+    expect(fetches[0].body.offsetId).toBe(88442);
+  });
+
+  it("a failed scan retries from the same place rather than skipping ahead", async () => {
+    const { fetches, session, m, env } = setup(88442, false);
+
+    await handleMigrationCallback(makeCtx("mig_resume_failed_99999").ctx, session, env);
+
+    expect(m.nextOffsetId).toBe(88442);      // 99999 was never reached
+    expect(fetches[0].body.offsetId).toBe(88442);
+    expect(fetches[0].body.offsetId).not.toBe(99999);
+  });
+});
