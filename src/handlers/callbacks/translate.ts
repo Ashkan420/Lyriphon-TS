@@ -214,8 +214,7 @@ async function applyCachedOrTranslate(
   const cached = forceFresh ? undefined : session.telegraph.translatedLyrics?.[cacheKey];
 
   if (cached) {
-    const originalLineCount = originalLyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
-    const parsedLines = parseTranslationJson(cached.text, originalLineCount);
+    const parsedLines = parseTranslationJson(cached.text, originalLyrics);
     if (parsedLines) {
       log("translate:cache-hit", "original:", originalLyrics, "translation:", parsedLines);
       const result = combineLyricsFromJson(originalLyrics, parsedLines.split("\n"));

@@ -73,8 +73,7 @@ export function getDisplayLyrics(session: SessionData): string | null {
   }
 
   // Cache stores raw JSON from Gemini — parse and combine
-  const originalLineCount = originalLyrics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").length;
-  const parsedLines = parseTranslationJson(entry.text, originalLineCount);
+  const parsedLines = parseTranslationJson(entry.text, originalLyrics);
   if (parsedLines) {
     const combined = combineLyricsFromJson(originalLyrics, parsedLines.split("\n"));
     if (combined) {

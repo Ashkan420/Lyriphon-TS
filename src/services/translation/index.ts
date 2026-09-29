@@ -103,7 +103,7 @@ export async function translateLyrics(
     }
 
     const originalLineCount = lineCount;
-    const parsedLines = parseTranslationJson(geminiResult.text, originalLineCount);
+    const parsedLines = parseTranslationJson(geminiResult.text, normalizedLyrics);
 
     if (!parsedLines) {
       // Full model output for owner diffing — the snippet isn't enough to see

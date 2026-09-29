@@ -1,4 +1,5 @@
 import { warn } from "../../utils/logger";
+import { normalizeLyrics } from "../../utils/lyrics";
 
 const SECTION_LABEL_RE = /^\[.+\]$/;
 
@@ -43,7 +44,7 @@ interface JsonTranslation {
  */
 export function parseTranslationJson(
   rawJson: string,
-  originalLineCount: number,
+  originalLyrics: string,
 ): string | null {
   let parsed: JsonTranslation;
   try {
@@ -63,15 +64,7 @@ export function parseTranslationJson(
     return null;
   }
 
-  if (parsed.lines.length !== originalLineCount) {
-    warn("parseTranslationJson: line count mismatch", {
-      expected: originalLineCount,
-      got: parsed.lines.length,
-    });
-    return null;
-  }
-
-  // Validate every entry has n and t, and n is sequential
+  // JSON integrity only: every entry carries n and t, and n runs 1..N in order.
   for (let i = 0; i < parsed.lines.length; i++) {
     const entry = parsed.lines[i];
     if (typeof entry.n !== "number" || typeof entry.t !== "string") {
@@ -84,7 +77,39 @@ export function parseTranslationJson(
     }
   }
 
-  return parsed.lines.map((l) => l.t).join("\n");
+  // ── Align on the ORIGINAL as the skeleton ────────────────────────────────
+  //
+  // A blank line has nothing to translate, so how the model handles one is not
+  // information — and it is demonstrably unreliable there. A live run on a
+  // song whose tail repeats the same line four times produced 64 entries for a
+  // 63-line input (one duplicated repetition); the retry collapsed the blanks
+  // and shifted everything. Both failed on array length alone, and with only
+  // one retry the translation died completely.
+  //
+  // So: blanks come from the original, and only NON-BLANK lines are paired, in
+  // order. A genuinely dropped or invented lyric still changes the non-blank
+  // count and is rejected; combineLyricsFromJson's positional drift check has
+  // the final say on pairing.
+  const originalLines = normalizeLyrics(originalLyrics).split("\n");
+  const modelText = parsed.lines
+    .map((l) => l.t)
+    .filter((t) => t.trim() !== "");
+  const originalText = originalLines.filter((l) => l.trim() !== "");
+
+  if (originalText.length !== modelText.length) {
+    warn("parseTranslationJson: non-blank line count mismatch", {
+      expected: originalText.length,
+      got: modelText.length,
+      originalTotal: originalLines.length,
+      modelTotal: parsed.lines.length,
+    });
+    return null;
+  }
+
+  let next = 0;
+  return originalLines
+    .map((line) => (line.trim() === "" ? "" : modelText[next++]))
+    .join("\n");
 }
 
 // ── Text-based combine (legacy, used for cache fallback) ────────────────────
