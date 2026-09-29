@@ -66,6 +66,20 @@ function fakeScanDb(seed: Row[] = []) {
           .sort((a, b) => b.message_id - a.message_id);
       }
 
+      if (sql.includes("SET status = 'pending', outcome = NULL")) {
+        const [user_id, channel_id] = bound;
+        let changes = 0;
+        for (const r of rows) {
+          if (r.user_id === user_id && r.channel_id === channel_id
+            && r.status === "handled" && r.outcome === "declined") {
+            r.status = "pending";
+            r.outcome = null;
+            changes += 1;
+          }
+        }
+        return { changed: changes > 0, changes };
+      }
+
       if (sql.includes("WHERE id = ?") && sql.includes("SET status = 'handled'")) {
         const [outcome, id] = bound;
         const row = rows.find((r) => r.id === id && r.status === "pending");
@@ -125,6 +139,9 @@ function fakeScanDb(seed: Row[] = []) {
       async first<T>() { const r = exec(); return ((Array.isArray(r) ? r[0] : r) ?? null) as T; },
       async run() {
         const r = exec();
+        if (r && typeof r === "object" && "changes" in (r as any)) {
+          return { meta: { changes: (r as any).changes } };
+        }
         const changed = r && typeof r === "object" && "changed" in (r as any)
           ? ((r as any).changed ? 1 : 0)
           : 1;
@@ -1430,5 +1447,94 @@ describe("the walk advances into older history", () => {
     expect(m.nextOffsetId).toBe(88442);      // 99999 was never reached
     expect(fetches[0].body.offsetId).toBe(88442);
     expect(fetches[0].body.offsetId).not.toBe(99999);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "No" is a decision about the post right now, not a verdict for all time.
+// ---------------------------------------------------------------------------
+
+describe("a new run re-opens what was declined", () => {
+  function mixed() {
+    return fakeScanDb([
+      scanRow({ id: 1, message_id: 101, status: "handled", outcome: "declined",
+                existing_url: "https://telegra.ph/A" }),
+      scanRow({ id: 2, message_id: 102, status: "handled", outcome: "added",
+                existing_url: "https://telegra.ph/B" }),
+      scanRow({ id: 3, message_id: 103, status: "failed",
+                existing_url: "https://telegra.ph/C" }),
+      scanRow({ id: 4, message_id: 104, status: "pending",
+                existing_url: "https://telegra.ph/D" }),
+    ]);
+  }
+
+  it("reopenDeclined returns declined rows to the queue and nothing else", async () => {
+    const { reopenDeclined } = await import("../src/db/scanQueue");
+    const db = mixed();
+
+    const reopened = await reopenDeclined(db as any, "42", "-1001");
+    expect(reopened).toBe(1);
+
+    const byId = (n: number) => db.rows.find((r) => r.id === n)!;
+    expect(byId(1)).toMatchObject({ status: "pending", outcome: null });   // declined → back
+    expect(byId(2)).toMatchObject({ status: "handled", outcome: "added" }); // gained a button — stays done
+    expect(byId(3)).toMatchObject({ status: "failed" });                    // not silently retried
+    expect(byId(4)).toMatchObject({ status: "pending" });                   // untouched
+  });
+
+  it("a reopened post is offered again by the next advance", async () => {
+    const { reopenDeclined, listPending } = await import("../src/db/scanQueue");
+    const db = mixed();
+
+    await reopenDeclined(db as any, "42", "-1001");
+    const pending = await listPending(db as any, "42", "-1001");
+    const ids = pending.map((r) => r.id);
+
+    expect(ids).toContain(1);   // the one that was declined
+    expect(ids).toContain(4);   // never answered
+    expect(ids).not.toContain(2); // added — already has its button
+    expect(ids).not.toContain(3); // failed
+    // newest first
+    expect(ids[0]).toBe(4);
+  });
+
+  it("a declined post is NOT re-offered inside the same run", async () => {
+    const { listPending } = await import("../src/db/scanQueue");
+    const db = fakeScanDb([
+      scanRow({ id: 1, message_id: 101, status: "handled", outcome: "declined" }),
+      scanRow({ id: 2, message_id: 102, status: "pending" }),
+    ]);
+
+    const pending = await listPending(db as any, "42", "-1001");
+    expect(pending.map((r) => r.id)).toEqual([2]);
+  });
+
+  it("the reopening happens when the channel is picked, before the scan", async () => {
+    const db = mixed();
+    const session = createSessionData();
+    const m = migrationOf(session);
+    m.phase = "idle";
+
+    const fetches: string[] = [];
+    const env: any = {
+      DB: db,
+      BOT_OWNER_ID: "42",
+      BRIDGE_DO: {
+        idFromName: () => "bridge",
+        get: () => ({
+          fetch: async (url: string) => {
+            fetches.push(url);
+            return { json: async () => ({ ok: true }) };
+          },
+        }),
+      },
+    };
+
+    await handleMigrationCallback(makeCtx("mig_pick_-1001").ctx, session, env);
+
+    expect(db.rows.find((r) => r.id === 1)).toMatchObject({ status: "pending", outcome: null });
+    expect(db.rows.find((r) => r.id === 2)).toMatchObject({ outcome: "added" });
+    expect(fetches).toHaveLength(1);   // and the run still starts normally
+    expect(m.phase).toBe("pick_channel");
   });
 });

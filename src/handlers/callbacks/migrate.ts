@@ -20,6 +20,7 @@ import {
   countByOutcome,
   countByStatus,
   getScanRow,
+  reopenDeclined,
   setExistingUrl,
 } from "../../db/scanQueue";
 import { buildTrackResultHtml } from "../../utils/richMessages";
@@ -456,6 +457,21 @@ async function onPickChannel(
   migration.nextOffsetId = 0;
   migration.scanExhausted = false;
   migration.phase = "pick_channel";
+
+  // A fresh run re-opens what was declined last time (FR-028). "No" is a
+  // decision about that post right now, not a verdict for all time — and the
+  // scan cannot revive it on its own, because INSERT OR IGNORE leaves an
+  // existing row untouched. Done here, before the scan, so the very first
+  // advance already sees them; 'added' and 'failed' rows are left alone.
+  try {
+    const reopened = await reopenDeclined(env.DB, String(ctx.from?.id ?? ""), channelId);
+    if (reopened) {
+      log("migrate: reopened previously declined candidates", reopened);
+    }
+  } catch (error) {
+    // Never block a run on the reopening — worst case the old decisions hold.
+    warn("migrate: failed to reopen declined candidates", error);
+  }
 
   const outcome = await requestScanPage(env, userId, channelId, 0);
   if (outcome !== "ok") {

@@ -178,6 +178,32 @@ export async function setExistingUrl(
     .bind(url, id).run();
 }
 
+// Re-open everything the admin previously declined, at the START of a new run
+// over the same channel.
+//
+// "No" is a decision about the post right now, not a permanent verdict — a post
+// that never gained a button is exactly the thing a later run should offer
+// again. Without this, status='handled' hides it forever: the scan cannot
+// revive it either, because INSERT OR IGNORE leaves an existing row alone.
+//
+// Only 'declined' is reopened. 'added' rows stay handled — that post now has a
+// button, so re-offering it would be wrong — and 'failed' is left alone too, so
+// a genuinely uneditable post is not silently retried forever.
+export async function reopenDeclined(
+  db: D1Database,
+  userId: string,
+  channelId: string,
+): Promise<number> {
+  await ensureTable(db);
+  const res = await db.prepare(`
+    UPDATE scan_queue
+       SET status = 'pending', outcome = NULL
+     WHERE user_id = ? AND channel_id = ?
+       AND status = 'handled' AND outcome = 'declined'
+  `).bind(userId, channelId).run();
+  return res.meta?.changes ?? 0;
+}
+
 // Summary counts (FR-031). Skipped rows are excluded from 'offered': a post
 // that already had a Lyrics button was never offered to anyone (SC-004).
 export async function countByStatus(
