@@ -33,6 +33,7 @@ import {
 } from "../../db/audioRequests";
 
 export async function handleTrackSelectionCallback(ctx: Context, session: SessionData, env: Env) {
+  const myVersion = captureVersion(session);
   await safeAnswer(ctx);
   const data = ctx.callbackQuery?.data;
   if (!data || !data.startsWith("track_")) {
@@ -97,16 +98,6 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     && (await isUserAutoFetchEnabled(env.DB, requesterId));
   let queuedPosition: number | undefined;
   const shouldAutoFetch = autoGetForUser && !trackRecord?.file_id && !userProvidedAudio;
-  if (shouldAutoFetch) {
-    const queued = await enqueueAutoFetch(
-      env, requesterId, requesterChatId, trackId, trackName, artistName,
-    );
-    if (queued) {
-      session.telegraph.bridgeReqToken = queued.token;
-      queuedPosition = queued.position;
-    }
-  }
-
   let releaseDate = "Unknown";
   if (albumId) {
     const albumInfo = await getAlbum(albumId);
@@ -202,7 +193,6 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
     return;
   }
 
-  const myVersion = captureVersion(session);
   if (isStale(session, myVersion)) {
     log("track pipeline: stale session after Telegraph, discarding");
     return;
@@ -220,16 +210,16 @@ export async function handleTrackSelectionCallback(ctx: Context, session: Sessio
   session.telegraph.pendingTranslationLang = undefined;
   session.telegraph.summaryRefreshCount = undefined;
   resetTranslationState(session);
-
-  // The bridge job now has a Lyrics link to attach to the delivered audio.
-  if (session.telegraph.bridgeReqToken) {
-    try {
-      await setRequestTelegraphUrl(env.DB, session.telegraph.bridgeReqToken, telegraphResult.url);
-    } catch (error) {
-      warn("autofetch: failed to attach telegraph url", error);
+  // Only enqueue once Telegraph exists; store its URL before BridgeDO can deliver the file.
+  if (shouldAutoFetch && requesterChatId) {
+    const queued = await enqueueAutoFetch(
+      env, requesterId, requesterChatId, trackId, trackName, artistName, telegraphResult.url,
+    );
+    if (queued) {
+      session.telegraph.bridgeReqToken = queued.token;
+      queuedPosition = queued.position;
     }
   }
-
   if (session.telegraph.languageAnalysis) {
     const la = session.telegraph.languageAnalysis;
     log(
@@ -409,6 +399,7 @@ async function enqueueAutoFetch(
   trackId: number,
   trackName: string,
   artistName: string,
+  telegraphUrl: string,
 ): Promise<{ token: string; position: number } | undefined> {
   try {
     if (!env.BRIDGE_CHAT_ID || !env.TELEGRAM_API_ID || !env.TELEGRAM_API_HASH) {
@@ -440,6 +431,7 @@ async function enqueueAutoFetch(
       trackTitle: trackName,
       artistName,
     });
+    await setRequestTelegraphUrl(env.DB, token, telegraphUrl);
     const position = await sendBridgeJob(env, token, trackId, chatId);
     log("autofetch: job queued", JSON.stringify({ trackId, token, position }));
     return { token, position };
