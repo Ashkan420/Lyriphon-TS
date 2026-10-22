@@ -18,7 +18,8 @@ STRICT RULES:
 - Insert the natural short vowels that Persian script omits (e.g. گل is "gol", not "gl").
 - Output ONLY the transliteration. No quotes, no explanation, no notes, no original script.
 - Keep words that are already in Latin letters unchanged.
-- Preserve word order and spacing.`;
+- Preserve word order and spacing.
+- The result should be close to an existing persian song/artist/album name in Finglish, if applicable. Otherwise, transliterate faithfully.`;
 
 /**
  * Pull the Finglish text out of a Gemini response. geminiTranslate forces JSON
