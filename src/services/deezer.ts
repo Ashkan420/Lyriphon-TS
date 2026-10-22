@@ -2,6 +2,7 @@ import { DEEZER_MAX_RETRIES, HTTP_TIMEOUT_MS } from "../config";
 import { log, warn } from "../utils/logger";
 import { retryAsync, BoundedRetryError } from "../utils/retry";
 import { fetchWithTimeout } from "../utils/fetch";
+import { prepareApiRequest } from "./apiRelay";
 
 const DEEZER_SEARCH_URL = "https://api.deezer.com/search";
 const DEEZER_ALBUM_SEARCH_URL = "https://api.deezer.com/search/album";
@@ -92,8 +93,14 @@ function isEdgeBlock(status: number, body: string): boolean {
 async function deezerFetchJson(url: string, label: string): Promise<any | null> {
   try {
     return await retryAsync(async () => {
-      const response = await fetchWithTimeout(url, {
-        headers: DEEZER_HEADERS,
+      const request = prepareApiRequest(
+        "deezer",
+        url,
+        DEEZER_HEADERS,
+      );
+
+      const response = await fetchWithTimeout(request.url, {
+        headers: request.headers,
         timeoutMs: HTTP_TIMEOUT_MS,
       });
 

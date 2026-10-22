@@ -3,6 +3,7 @@ import { retryAsync } from "../utils/retry";
 import { fetchWithTimeout } from "../utils/fetch";
 import { log, previewText, warn } from "../utils/logger";
 import { normalizeLyrics } from "../utils/lyrics";
+import { prepareApiRequest } from "./apiRelay";
 
 const LRCLIB_SEARCH = "https://lrclib.net/api/search";
 
@@ -86,8 +87,14 @@ export async function searchLyricsCandidates(
     url.searchParams.set("album_name", album);
   }
 
-  const response = await fetchWithTimeout(url.toString(), {
-    headers: LRCLIB_HEADERS,
+  const request = prepareApiRequest(
+    "lrclib",
+    url.toString(),
+    LRCLIB_HEADERS,
+  );
+
+  const response = await fetchWithTimeout(request.url, {
+    headers: request.headers,
     timeoutMs: LRCLIB_TIMEOUT_MS,
   });
 
